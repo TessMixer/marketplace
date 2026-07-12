@@ -134,3 +134,14 @@ img { display:block; object-fit:cover; }
   .auth-card h2 { font-size:29px; }.auth-grid { grid-template-columns:1fr;gap:0; }
   .auth-role-choice { gap:8px; }.auth-role-choice button { padding:10px; }.auth-role-choice small { display:none; }
 }
+@media (max-width:760px) {
+  .dashboard-app .sidebar { position:sticky;top:0;z-index:45;display:flex;height:auto;gap:10px;overflow-x:auto;background:#111827;border-bottom:1px solid #ffffff14;scrollbar-width:none; }
+  .dashboard-app .sidebar .brand { flex:0 0 auto;margin:0; }
+  .dashboard-app .sidebar .brand span,.dashboard-app .sidebar .workspace-label { display:none; }
+  .dashboard-app .sidebar nav { display:flex;gap:7px;overflow-x:auto;min-width:0;scrollbar-width:none; }
+  .dashboard-app .sidebar nav button { flex:0 0 auto;min-width:104px;padding:9px 10px;border-radius:11px;font-size:11px; }
+  .dashboard-app .sidebar nav button span { display:block;white-space:nowrap; }
+  .dashboard-app .sidebar-bottom { display:flex;flex:0 0 auto;margin:0 0 0 auto; }
+  .dashboard-app .user-card { border:0;padding:0; }
+  .dashboard-app .user-card .avatar,.dashboard-app .user-card span { display:none; }
+}
