@@ -8,6 +8,8 @@ import {
   Truck, UserRound, Users, UtensilsCrossed, WalletCards, X,
 } from "lucide-react";
 import { categories, initialMenu, initialOrders, money, restaurants, Role, OrderStatus } from "../data/mockData";
+import { isSupabaseConfigured } from "../lib/supabase";
+import { createMenu, createOrder, getCatalog, getOrders, setMenuAvailability, updateOrderStatus } from "../services/marketplaceRepository";
 
 type Screen = "home" | "restaurant" | "cart" | "tracking" | "seller" | "seller-menu" | "seller-orders" | "seller-report" | "seller-shop" | "admin" | "admin-shops" | "admin-users" | "admin-orders" | "admin-gp" | "admin-report";
 type CartItem = (typeof initialMenu)[number] & { quantity: number; note: string };
@@ -19,16 +21,29 @@ export default function MarketplaceApp() {
   const [screen, setScreen] = useState<Screen>("home");
   const [activeCategory, setActiveCategory] = useState("ทั้งหมด");
   const [query, setQuery] = useState("");
-  const [selectedRestaurant, setSelectedRestaurant] = useState(restaurants[0]);
-  const [menu, setMenu] = useState(initialMenu);
-  const [orders, setOrders] = useState(initialOrders);
+  const [shopData, setShopData] = useState<any[]>(restaurants);
+  const [selectedRestaurant, setSelectedRestaurant] = useState<any>(restaurants[0]);
+  const [menu, setMenu] = useState<any[]>(initialMenu);
+  const [orders, setOrders] = useState<any[]>(initialOrders);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [toast, setToast] = useState("");
   const [showMenuForm, setShowMenuForm] = useState(false);
   const [gp, setGp] = useState<Record<string, number>>(Object.fromEntries(restaurants.map((r) => [r.id, r.gpPercent])));
+  const [dataSource, setDataSource] = useState<"loading" | "supabase" | "mock">(isSupabaseConfigured ? "loading" : "mock");
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+    if (!isSupabaseConfigured) return;
+    Promise.all([getCatalog(), getOrders()]).then(([catalog, databaseOrders]) => {
+      if (catalog.restaurants.length) {
+        setShopData(catalog.restaurants);
+        setMenu(catalog.menu);
+        setSelectedRestaurant(catalog.restaurants[0]);
+        setGp(Object.fromEntries(catalog.restaurants.map((r:any) => [r.id, r.gpPercent])));
+      }
+      if (databaseOrders.length) setOrders(databaseOrders);
+      setDataSource("supabase");
+    }).catch(() => setDataSource("mock"));
   }, []);
 
   const go = (next: Screen) => { setScreen(next); window.scrollTo({ top: 0, behavior: "smooth" }); };
@@ -48,9 +63,14 @@ export default function MarketplaceApp() {
   };
 
   const updateQuantity = (id: string, amount: number) => setCart((current) => current.map((x) => x.id === id ? { ...x, quantity: x.quantity + amount } : x).filter((x) => x.quantity > 0));
-  const updateOrder = (id: string, status: OrderStatus) => { setOrders((current) => current.map((o) => o.id === id ? { ...o, status } : o)); flash(`อัปเดต ${id} เป็น “${status}” แล้ว`); };
+  const updateOrder = (id: string, status: OrderStatus) => {
+    const target = orders.find((o) => o.id === id);
+    setOrders((current) => current.map((o) => o.id === id ? { ...o, status } : o));
+    updateOrderStatus(target?.dbId, status).catch(() => flash("อัปเดตในเครื่องแล้ว แต่บัญชีนี้ยังไม่มีสิทธิ์แก้ไขฐานข้อมูล"));
+    flash(`อัปเดต ${id} เป็น “${status}” แล้ว`);
+  };
 
-  const visibleRestaurants = restaurants.filter((r) => `${r.name} ${r.description}`.toLowerCase().includes(query.toLowerCase()));
+  const visibleRestaurants = shopData.filter((r) => `${r.name} ${r.description}`.toLowerCase().includes(query.toLowerCase()));
   const currentMenu = menu.filter((m) => m.restaurantId === selectedRestaurant.id && (activeCategory === "ทั้งหมด" || m.category === activeCategory) && `${m.name} ${m.description}`.includes(query));
 
   const customerHeader = (
@@ -58,6 +78,7 @@ export default function MarketplaceApp() {
       <button className="brand" onClick={() => go("home")}><IconLogo /><span>อิ่มดี</span></button>
       <div className="location-pill"><MapPin size={17} /><span><small>จัดส่งที่</small><b>บ้าน · สุขุมวิท 49</b></span></div>
       <div className="header-actions">
+        <span className={`data-badge ${dataSource}`}><i />{dataSource === "supabase" ? "Supabase" : dataSource === "loading" ? "กำลังเชื่อมต่อ" : "ข้อมูลตัวอย่าง"}</span>
         <button className="icon-btn" aria-label="การแจ้งเตือน"><Bell size={21} /><i /></button>
         <button className="cart-button" onClick={() => go("cart")}><ShoppingCart size={20} /><span>ตะกร้า</span>{cartCount > 0 && <b>{cartCount}</b>}</button>
         <RolePicker role={role} onChange={switchRole} />
@@ -98,12 +119,12 @@ export default function MarketplaceApp() {
       <main className={role === "customer" ? "main" : "dashboard-main"}>
         {screen === "home" && <CustomerHome restaurants={visibleRestaurants} query={query} setQuery={setQuery} activeCategory={activeCategory} setActiveCategory={setActiveCategory} openRestaurant={(r) => { setSelectedRestaurant(r); setQuery(""); setActiveCategory("ทั้งหมด"); go("restaurant"); }} />}
         {screen === "restaurant" && <RestaurantPage restaurant={selectedRestaurant} menu={currentMenu} activeCategory={activeCategory} setActiveCategory={setActiveCategory} query={query} setQuery={setQuery} addToCart={addToCart} back={() => go("home")} cartCount={cartCount} openCart={() => go("cart")} />}
-        {screen === "cart" && <CartPage items={cart} foodTotal={foodTotal} deliveryFee={deliveryFee} updateQuantity={updateQuantity} updateNote={(id, note) => setCart((c) => c.map((x) => x.id === id ? { ...x, note } : x))} back={() => go("restaurant")} checkout={() => { setCart([]); go("tracking"); flash("สั่งอาหารสำเร็จ ร้านได้รับออเดอร์แล้ว"); }} />}
+        {screen === "cart" && <CartPage items={cart} foodTotal={foodTotal} deliveryFee={deliveryFee} updateQuantity={updateQuantity} updateNote={(id, note) => setCart((c) => c.map((x) => x.id === id ? { ...x, note } : x))} back={() => go("restaurant")} checkout={async () => { try { await createOrder({ restaurantId:selectedRestaurant.id,customerName:"ลูกค้าอิ่มดี",address:"บ้าน · สุขุมวิท 49",note:cart.map(i=>i.note).filter(Boolean).join("; "),deliveryFee,items:cart }); setDataSource("supabase"); } catch { flash("ไม่สามารถบันทึกออเดอร์ได้ กรุณาตรวจสอบการเชื่อมต่อ"); return; } setCart([]); go("tracking"); flash("สั่งอาหารสำเร็จ บันทึกลง Supabase แล้ว"); }} />}
         {screen === "tracking" && <TrackingPage back={() => go("home")} />}
 
         {screen === "seller" && <SellerDashboard go={go} orders={orders} updateOrder={updateOrder} />}
         {screen === "seller-orders" && <SellerOrders orders={orders} updateOrder={updateOrder} />}
-        {screen === "seller-menu" && <SellerMenu menu={menu.filter((m) => m.restaurantId === "r1")} toggle={(id) => setMenu((m) => m.map((x) => x.id === id ? { ...x, isAvailable: !x.isAvailable } : x))} showForm={showMenuForm} setShowForm={setShowMenuForm} addMenu={(name, price) => { setMenu((m) => [...m, { id: `m${Date.now()}`, restaurantId: "r1", name, price, description: "เมนูใหม่ของร้าน", category: "ข้าว", image: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80", isAvailable: true, popular: false }]); setShowMenuForm(false); flash("เพิ่มเมนูใหม่แล้ว"); }} />}
+        {screen === "seller-menu" && <SellerMenu menu={menu.filter((m) => m.restaurantId === shopData[0]?.id)} toggle={(id) => { const item=menu.find(x=>x.id===id); setMenu((m) => m.map((x) => x.id === id ? { ...x, isAvailable: !x.isAvailable } : x)); if(item) setMenuAvailability(id,!item.isAvailable).catch(()=>flash("ต้องเข้าสู่ระบบผู้ขายก่อนแก้ไขเมนูจริง")); }} showForm={showMenuForm} setShowForm={setShowMenuForm} addMenu={async (name, price) => { try { const saved=await createMenu({restaurantId:shopData[0].id,name,price}); if(saved) setMenu((m) => [...m, { id:saved.id,restaurantId:saved.restaurant_id,name:saved.name,price:Number(saved.price),description:saved.description,category:"ข้าว",image:saved.image_url || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80",isAvailable:true,popular:false }]); setShowMenuForm(false); flash("เพิ่มเมนูลง Supabase แล้ว"); } catch { flash("ต้องเข้าสู่ระบบผู้ขายก่อนเพิ่มเมนู"); } }} />}
         {screen === "seller-report" && <SellerReport />}
         {screen === "seller-shop" && <ShopSettings flash={flash} />}
 

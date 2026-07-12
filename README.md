@@ -1,6 +1,6 @@
 # อิ่มดี — Food Marketplace MVP
 
-เว็บแอป marketplace อาหารภาษาไทยสำหรับลูกค้า ร้านค้า และผู้ดูแลระบบ พัฒนาด้วย React 19, Next.js/Vinext, TypeScript และ Tailwind CSS ออกแบบแบบ Mobile First และรองรับ PWA
+เว็บแอป marketplace อาหารภาษาไทยสำหรับลูกค้า ร้านค้า และผู้ดูแลระบบ พัฒนาด้วย React 19, Next.js/Vinext, TypeScript, Tailwind CSS และ Supabase ออกแบบแบบ Mobile First และรองรับ PWA
 
 ## เริ่มใช้งาน
 
@@ -8,6 +8,7 @@
 
 ```bash
 npm install
+copy .env.example .env.local
 npm run dev
 ```
 
@@ -26,13 +27,16 @@ npm run start
 - ผู้ขาย: Dashboard, รับ/ปฏิเสธ/อัปเดตออเดอร์, เพิ่มและเปิด-ปิดเมนู, รายงานยอดขาย และข้อมูลร้าน
 - Admin: Dashboard ระบบ, ร้านค้า, ผู้ใช้, ออเดอร์, GP รายร้าน และรายงาน
 - PWA: manifest, theme color และ service worker สำหรับติดตั้งบนหน้าจอมือถือ
-- Mock data แยกไว้ที่ `app/data/mockData.ts` เพื่อเปลี่ยนเป็น Firebase หรือ Supabase repository ในระยะถัดไป
+- Supabase catalog และ order RPC พร้อม RLS policy; ใช้ mock data เป็น fallback เมื่อฐานข้อมูลไม่พร้อม
 
 ## โครงสร้างหลัก
 
 - `app/components/MarketplaceApp.tsx` — หน้าจอและ interaction ของ MVP
 - `app/data/mockData.ts` — type และข้อมูลจำลอง
+- `app/lib/supabase.ts` — Supabase browser client
+- `app/services/marketplaceRepository.ts` — repository สำหรับร้าน เมนู และออเดอร์
+- `supabase/migrations/` — schema, RLS, RPC และ seed data
 - `app/globals.css` — design system และ responsive layout
 - `app/manifest.ts`, `public/sw.js` — PWA
 
-ข้อมูลยังเป็น mock state ในหน่วยความจำ เมื่อรีเฟรชหน้าจะกลับเป็นค่าเริ่มต้น เหมาะสำหรับทดสอบ UX ก่อนเชื่อมฐานข้อมูลและระบบยืนยันตัวตนจริง
+ใส่ `NEXT_PUBLIC_SUPABASE_URL` และ `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` ใน `.env.local` ตาม `.env.example` ร้านและเมนูจะโหลดจาก Supabase โดยอัตโนมัติ ส่วนการแก้ไขข้อมูลผู้ขาย/Admin ต้องเข้าสู่ระบบด้วยบัญชีที่มี role และ ownership ถูกต้องตาม RLS
