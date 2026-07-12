@@ -486,7 +486,7 @@ export default function MarketplaceApp() {
             setQuery={setQuery}
             activeCategory={activeCategory}
             setActiveCategory={setActiveCategory}
-            openRestaurant={(shop) => {
+            openRestaurant={(shop: Restaurant) => {
               setSelectedRestaurant(shop);
               setQuery("");
               setActiveCategory("ทั้งหมด");
@@ -524,8 +524,8 @@ export default function MarketplaceApp() {
             quote={deliveryQuote}
             useCurrentLocation={useCurrentLocation}
             busy={busyAction === "checkout"}
-            updateQuantity={(id, amount) => setCart((current) => current.map((item) => (item.id === id ? { ...item, quantity: item.quantity + amount } : item)).filter((item) => item.quantity > 0))}
-            updateNote={(id, note) => setCart((current) => current.map((item) => (item.id === id ? { ...item, note } : item)))}
+            updateQuantity={(id: string, amount: number) => setCart((current) => current.map((item) => (item.id === id ? { ...item, quantity: item.quantity + amount } : item)).filter((item) => item.quantity > 0))}
+            updateNote={(id: string, note: string) => setCart((current) => current.map((item) => (item.id === id ? { ...item, note } : item)))}
             back={() => go(selectedRestaurant ? "restaurant" : "home")}
             checkout={submitOrder}
           />

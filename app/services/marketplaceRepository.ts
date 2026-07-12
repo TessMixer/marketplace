@@ -160,7 +160,7 @@ function mapOrder(row: any): Order {
     customer: row.customer_name ?? "ลูกค้า",
     restaurant: row.restaurants?.name ?? "ร้านอาหาร",
     restaurantId: row.restaurant_id,
-    items: itemDetails.map((item) => `${item.name} × ${item.quantity}`).join(", "),
+    items: itemDetails.map((item: { name: string; quantity: number }) => `${item.name} × ${item.quantity}`).join(", "),
     itemDetails,
     foodTotal: Number(row.food_total ?? 0),
     deliveryFee: Number(row.delivery_fee ?? 0),
