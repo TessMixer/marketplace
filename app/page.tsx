@@ -1,5 +1,6 @@
 import MarketplaceApp from "./components/MarketplaceApp";
+import { AuthProvider } from "./auth/AuthProvider";
 
 export default function Home() {
-  return <MarketplaceApp />;
+  return <AuthProvider><MarketplaceApp /></AuthProvider>;
 }

@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   ArrowLeft, BarChart3, Bell, Check, ChevronRight, CircleDollarSign, Clock3, CookingPot,
   Home, LayoutDashboard, MapPin, Menu as MenuIcon, Minus, PackageCheck, Plus, Search,
-  Settings, ShieldCheck, ShoppingBag, ShoppingCart, Star, Store, ToggleLeft, ToggleRight,
+  Settings, ShieldCheck, ShoppingBag, ShoppingCart, Star, Store, ToggleLeft, ToggleRight, LogOut,
   Truck, UserRound, Users, UtensilsCrossed, WalletCards, X,
 } from "lucide-react";
 import { categories, initialMenu, initialOrders, money, restaurants, Role, OrderStatus } from "../data/mockData";
 import { isSupabaseConfigured } from "../lib/supabase";
-import { createMenu, createOrder, getCatalog, getOrders, setMenuAvailability, updateOrderStatus } from "../services/marketplaceRepository";
+import { createMenu, createOrder, getCatalog, getOrders, getSellerWorkspace, setMenuAvailability, updateOrderStatus } from "../services/marketplaceRepository";
+import { useAuth } from "../auth/AuthProvider";
+import AuthScreen from "../auth/AuthScreen";
 
 type Screen = "home" | "restaurant" | "cart" | "tracking" | "seller" | "seller-menu" | "seller-orders" | "seller-report" | "seller-shop" | "admin" | "admin-shops" | "admin-users" | "admin-orders" | "admin-gp" | "admin-report";
 type CartItem = (typeof initialMenu)[number] & { quantity: number; note: string };
@@ -17,6 +19,7 @@ type CartItem = (typeof initialMenu)[number] & { quantity: number; note: string 
 const IconLogo = () => <div className="logo-mark"><UtensilsCrossed size={20} strokeWidth={2.6} /></div>;
 
 export default function MarketplaceApp() {
+  const { session, profile, loading: authLoading, configured, signOut } = useAuth();
   const [role, setRole] = useState<Role>("customer");
   const [screen, setScreen] = useState<Screen>("home");
   const [activeCategory, setActiveCategory] = useState("ทั้งหมด");
@@ -46,9 +49,25 @@ export default function MarketplaceApp() {
     }).catch(() => setDataSource("mock"));
   }, []);
 
+  useEffect(()=>{
+    if(!profile) return;
+    const redirectTimer=window.setTimeout(()=>{
+      setRole(profile.role);
+      setScreen(profile.role==="customer"?"home":profile.role==="seller"?"seller":"admin");
+    },0);
+    getOrders().then(databaseOrders=>{ if(databaseOrders.length) setOrders(databaseOrders); }).catch(()=>undefined);
+    if(profile.role==="seller") getSellerWorkspace(profile.id).then(workspace=>{
+      setShopData([workspace.restaurant]); setSelectedRestaurant(workspace.restaurant); setMenu(workspace.menu); setDataSource("supabase");
+    }).catch(()=>undefined);
+    return()=>window.clearTimeout(redirectTimer);
+  },[profile]);
+
   const go = (next: Screen) => { setScreen(next); window.scrollTo({ top: 0, behavior: "smooth" }); };
   const flash = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2200); };
-  const switchRole = (next: Role) => { setRole(next); go(next === "customer" ? "home" : next === "seller" ? "seller" : "admin"); };
+  const switchRole = (next: Role) => {
+    if(profile&&next!==profile.role){ flash("บัญชีนี้ไม่มีสิทธิ์เข้าสู่หน้าดังกล่าว"); return; }
+    setRole(next); go(next === "customer" ? "home" : next === "seller" ? "seller" : "admin");
+  };
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const foodTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const deliveryFee = cart.length ? selectedRestaurant.delivery : 0;
@@ -78,10 +97,11 @@ export default function MarketplaceApp() {
       <button className="brand" onClick={() => go("home")}><IconLogo /><span>อิ่มดี</span></button>
       <div className="location-pill"><MapPin size={17} /><span><small>จัดส่งที่</small><b>บ้าน · สุขุมวิท 49</b></span></div>
       <div className="header-actions">
-        <span className={`data-badge ${dataSource}`}><i />{dataSource === "supabase" ? "Supabase" : dataSource === "loading" ? "กำลังเชื่อมต่อ" : "ข้อมูลตัวอย่าง"}</span>
+        <span className={`data-badge ${dataSource}`}><i />{dataSource === "supabase" ? "Supabase Connected" : dataSource === "loading" ? "กำลังเชื่อมต่อ" : "ข้อมูลตัวอย่าง"}</span>
         <button className="icon-btn" aria-label="การแจ้งเตือน"><Bell size={21} /><i /></button>
         <button className="cart-button" onClick={() => go("cart")}><ShoppingCart size={20} /><span>ตะกร้า</span>{cartCount > 0 && <b>{cartCount}</b>}</button>
-        <RolePicker role={role} onChange={switchRole} />
+        <span className="user-role-chip"><UserRound size={16}/>{profile?.name||"โหมดทดลอง"}<small>{roleLabel(role)}</small></span>
+        <button className="logout-button compact" onClick={()=>signOut()} aria-label="ออกจากระบบ"><LogOut size={18}/></button>
       </div>
     </header>
   );
@@ -100,7 +120,7 @@ export default function MarketplaceApp() {
       <button className="brand brand-light" onClick={() => go(role === "seller" ? "seller" : "admin")}><IconLogo /><span>อิ่มดี</span></button>
       <div className="workspace-label">{role === "seller" ? "ศูนย์จัดการร้านค้า" : "ผู้ดูแลระบบ"}</div>
       <nav>{(role === "seller" ? sellerNav : adminNav).map(([id, label, Icon]) => <button key={id} className={screen === id ? "active" : ""} onClick={() => go(id)}><Icon size={20} /><span>{label}</span>{id === "seller-orders" && <em>3</em>}</button>)}</nav>
-      <div className="sidebar-bottom"><RolePicker role={role} onChange={switchRole} dark /><div className="user-card"><div className="avatar">{role === "seller" ? "อ" : "แ"}</div><span><b>{role === "seller" ? "คุณอรทัย" : "แอดมินหลัก"}</b><small>{role === "seller" ? "ครัวแม่อร" : "ผู้ดูแลระบบ"}</small></span></div></div>
+      <div className="sidebar-bottom"><div className="user-card"><div className="avatar">{profile?.name?.[0]||"อ"}</div><span><b>{profile?.name||"ผู้ใช้งาน"}</b><small>{roleLabel(role)}</small></span><button className="logout-button" onClick={()=>signOut()} aria-label="ออกจากระบบ"><LogOut size={18}/></button></div></div>
     </aside>
   ) : null;
 
@@ -112,6 +132,9 @@ export default function MarketplaceApp() {
       <button onClick={() => switchRole("seller")}><Store size={21} /><span>ร้านค้า</span></button>
     </nav>
   ) : null;
+
+  if(authLoading) return <div className="auth-loading"><IconLogo/><span>กำลังตรวจสอบบัญชี...</span></div>;
+  if(configured&&!session) return <AuthScreen/>;
 
   return (
     <div className={role === "customer" ? "app customer-app" : "app dashboard-app"}>
@@ -140,6 +163,8 @@ export default function MarketplaceApp() {
     </div>
   );
 }
+
+const roleLabel=(role:Role)=>role==="customer"?"ลูกค้า":role==="seller"?"ผู้ขาย":"ผู้ดูแลระบบ";
 
 function RolePicker({ role, onChange, dark = false }: { role: Role; onChange: (r: Role) => void; dark?: boolean }) {
   return <select className={`role-picker ${dark ? "dark" : ""}`} aria-label="เปลี่ยนบทบาท" value={role} onChange={(e) => onChange(e.target.value as Role)}><option value="customer">ลูกค้า</option><option value="seller">ผู้ขาย</option><option value="admin">Admin</option></select>;

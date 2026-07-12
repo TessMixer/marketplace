@@ -17,6 +17,18 @@ export async function getCatalog() {
   };
 }
 
+export async function getSellerWorkspace(profileId:string) {
+  if(!supabase) throw new Error("Supabase is not configured");
+  const {data:restaurant,error}=await supabase.from("restaurants").select("*").eq("owner_id",profileId).single();
+  if(error) throw error;
+  const {data:menuRows,error:menuError}=await supabase.from("menu_items").select("*, categories(name)").eq("restaurant_id",restaurant.id).order("created_at");
+  if(menuError) throw menuError;
+  return {
+    restaurant:{id:restaurant.id,name:restaurant.name,description:restaurant.description,image:restaurant.image_url||"https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=1000&q=80",rating:Number(restaurant.rating),time:restaurant.delivery_minutes,delivery:Number(restaurant.delivery_fee),isOpen:restaurant.is_open,status:restaurant.status,gpPercent:Number(restaurant.gp_percent)},
+    menu:(menuRows??[]).map((m:any)=>({id:m.id,restaurantId:m.restaurant_id,name:m.name,description:m.description,price:Number(m.price),image:m.image_url||"https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80",category:m.categories?.name??"อื่น ๆ",isAvailable:m.is_available,popular:m.is_popular})),
+  };
+}
+
 export async function getOrders() {
   if (!supabase) throw new Error("Supabase is not configured");
   const { data, error } = await supabase.from("orders").select("*, restaurants(name), order_items(item_name,quantity,note)").order("created_at", { ascending:false }).limit(50);

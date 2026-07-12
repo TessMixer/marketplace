@@ -1,0 +1,76 @@
+"use client";
+
+import type { Session, User } from "@supabase/supabase-js";
+import { createContext, useContext, useEffect, useState } from "react";
+import { isSupabaseConfigured, supabase } from "../lib/supabase";
+import type { Role } from "../data/mockData";
+
+export type Profile = { id:string; auth_user_id:string; name:string; phone:string|null; email:string|null; role:Role; created_at:string };
+export type RegisterInput = { name:string; phone:string; email:string; password:string; role:"customer"|"seller"; restaurantName?:string; restaurantDescription?:string; restaurantPhone?:string; restaurantAddress?:string; openTime?:string; closeTime?:string };
+
+type AuthContextValue = {
+  session:Session|null; user:User|null; profile:Profile|null; loading:boolean; configured:boolean;
+  signIn:(email:string,password:string)=>Promise<void>;
+  register:(input:RegisterInput)=>Promise<{needsEmailConfirmation:boolean}>;
+  signOut:()=>Promise<void>; refreshProfile:()=>Promise<void>;
+};
+
+const AuthContext = createContext<AuthContextValue|null>(null);
+
+async function loadProfile(userId:string) {
+  if(!supabase) return null;
+  const {data,error}=await supabase.from("profiles").select("id,auth_user_id,name,phone,email,role,created_at").eq("auth_user_id",userId).single();
+  if(error) throw error;
+  return data as Profile;
+}
+
+export function AuthProvider({children}:{children:React.ReactNode}) {
+  const [session,setSession]=useState<Session|null>(null);
+  const [profile,setProfile]=useState<Profile|null>(null);
+  const [loading,setLoading]=useState(isSupabaseConfigured);
+
+  const refreshProfile=async()=>{ if(session?.user) setProfile(await loadProfile(session.user.id)); };
+
+  useEffect(()=>{
+    if(!supabase) return;
+    supabase.auth.getSession().then(async({data})=>{
+      setSession(data.session);
+      if(data.session?.user) setProfile(await loadProfile(data.session.user.id).catch(()=>null));
+      setLoading(false);
+    });
+    const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,nextSession)=>{
+      setSession(nextSession);
+      if(nextSession?.user) window.setTimeout(()=>loadProfile(nextSession.user.id).then(setProfile).catch(()=>setProfile(null)),0);
+      else setProfile(null);
+      setLoading(false);
+    });
+    return()=>subscription.unsubscribe();
+  },[]);
+
+  const signIn=async(email:string,password:string)=>{
+    if(!supabase) throw new Error("ยังไม่ได้เชื่อมต่อ Supabase");
+    const {data,error}=await supabase.auth.signInWithPassword({email,password});
+    if(error) throw error;
+    setSession(data.session);
+    setProfile(await loadProfile(data.user.id));
+  };
+
+  const register=async(input:RegisterInput)=>{
+    if(!supabase) throw new Error("ยังไม่ได้เชื่อมต่อ Supabase");
+    const {data,error}=await supabase.auth.signUp({email:input.email,password:input.password,options:{data:{
+      name:input.name,phone:input.phone,role:input.role,
+      restaurant_name:input.restaurantName,restaurant_description:input.restaurantDescription,
+      restaurant_phone:input.restaurantPhone,restaurant_address:input.restaurantAddress,
+      open_time:input.openTime,close_time:input.closeTime,
+    }}});
+    if(error) throw error;
+    if(data.session && data.user){ setSession(data.session); setProfile(await loadProfile(data.user.id)); }
+    return {needsEmailConfirmation:!data.session};
+  };
+
+  const signOut=async()=>{ if(supabase) await supabase.auth.signOut(); setSession(null); setProfile(null); };
+
+  return <AuthContext.Provider value={{session,user:session?.user??null,profile,loading,configured:isSupabaseConfigured,signIn,register,signOut,refreshProfile}}>{children}</AuthContext.Provider>;
+}
+
+export function useAuth(){ const context=useContext(AuthContext); if(!context) throw new Error("useAuth must be used within AuthProvider"); return context; }
