@@ -45,9 +45,11 @@ import {
   createMenu,
   createOrder,
   deleteMenu,
+  DeliveryQuote,
   getAdminReport,
   getCatalog,
   getCategories,
+  getDeliveryQuote,
   getOrders,
   getProfiles,
   getSellerReport,
@@ -125,6 +127,10 @@ function toRestaurant(row: (typeof mockRestaurants)[number]): Restaurant {
     rating: row.rating,
     delivery: row.delivery,
     time: row.time,
+    latitude: null,
+    longitude: null,
+    locationAddress: "",
+    locationUpdatedAt: null,
     createdAt: new Date().toISOString(),
   };
 }
@@ -167,6 +173,11 @@ function toOrder(row: (typeof initialOrders)[number]): Order {
     createdAt: new Date().toISOString(),
     note: row.note,
     address: "บ้าน · สุขุมวิท 49",
+    deliveryLatitude: null,
+    deliveryLongitude: null,
+    restaurantLatitude: null,
+    restaurantLongitude: null,
+    deliveryDistanceKm: null,
   };
 }
 
@@ -200,6 +211,11 @@ export default function MarketplaceApp() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [checkoutAddress, setCheckoutAddress] = useState("บ้าน · สุขุมวิท 49");
   const [checkoutNote, setCheckoutNote] = useState("");
+  const [checkoutLatitude, setCheckoutLatitude] = useState<number | null>(null);
+  const [checkoutLongitude, setCheckoutLongitude] = useState<number | null>(null);
+  const [deliveryQuote, setDeliveryQuote] = useState<DeliveryQuote>({ distanceKm: null, deliveryFee: 20, restaurantHasLocation: false, usesGps: false });
+  const [locationState, setLocationState] = useState<"idle" | "loading" | "success" | "error">("idle");
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const [lastOrderId, setLastOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const [dataSource, setDataSource] = useState<"loading" | "supabase" | "mock">(isSupabaseConfigured ? "loading" : "mock");
@@ -282,7 +298,15 @@ export default function MarketplaceApp() {
     }
   };
 
-  const visibleRestaurants = restaurants.filter((shop) => `${shop.name} ${shop.description}`.toLowerCase().includes(query.toLowerCase()));
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleRestaurants = restaurants.filter((shop) => {
+    const shopMenu = menu.filter((item) => item.restaurantId === shop.id && item.isAvailable && !item.isDeleted);
+    const matchesCategory = activeCategory === "ทั้งหมด" || shopMenu.some((item) => item.category === activeCategory);
+    const matchesQuery = !normalizedQuery
+      || `${shop.name} ${shop.description}`.toLowerCase().includes(normalizedQuery)
+      || shopMenu.some((item) => `${item.name} ${item.description}`.toLowerCase().includes(normalizedQuery));
+    return matchesCategory && matchesQuery;
+  });
   const currentMenu = menu.filter(
     (item) =>
       item.restaurantId === selectedRestaurant?.id &&
@@ -293,8 +317,10 @@ export default function MarketplaceApp() {
   );
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const foodTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const deliveryFee = cart.length ? selectedRestaurant?.delivery ?? 0 : 0;
-  const customerOrders = orders.filter((order) => (lastOrderId ? order.dbId === lastOrderId : true));
+  const deliveryFee = cart.length ? deliveryQuote.deliveryFee : 0;
+  const customerOrders = lastOrderId
+    ? [...orders.filter((order) => order.dbId === lastOrderId), ...orders.filter((order) => order.dbId !== lastOrderId)]
+    : orders;
 
   const addToCart = (item: MenuItem) => {
     if (cart.length && cart[0].restaurantId !== item.restaurantId) setCart([]);
@@ -305,13 +331,57 @@ export default function MarketplaceApp() {
     flash(`เพิ่ม “${item.name}” ลงตะกร้าแล้ว`);
   };
 
+  const refreshDeliveryQuote = async (latitude: number | null, longitude: number | null) => {
+    if (!selectedRestaurant) return;
+    try {
+      const quote = await getDeliveryQuote(selectedRestaurant.id, latitude, longitude);
+      setDeliveryQuote(quote);
+    } catch {
+      setDeliveryQuote({ distanceKm: null, deliveryFee: 20, restaurantHasLocation: Boolean(selectedRestaurant.latitude && selectedRestaurant.longitude), usesGps: false });
+      flash("คำนวณค่าส่งจากตำแหน่งไม่ได้ ระบบใช้ค่าส่งเริ่มต้น 20 บาท");
+    }
+  };
+
+  const useCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      setLocationState("error");
+      flash("อุปกรณ์นี้ไม่รองรับ GPS กรุณากรอกที่อยู่จัดส่งเอง");
+      return;
+    }
+    setLocationState("loading");
+    navigator.geolocation.getCurrentPosition(
+      async ({ coords }) => {
+        setCheckoutLatitude(coords.latitude);
+        setCheckoutLongitude(coords.longitude);
+        setLocationState("success");
+        await refreshDeliveryQuote(coords.latitude, coords.longitude);
+        flash("ได้ตำแหน่งปัจจุบันแล้ว");
+      },
+      () => {
+        setCheckoutLatitude(null);
+        setCheckoutLongitude(null);
+        setLocationState("error");
+        setDeliveryQuote((current) => ({ ...current, distanceKm: null, deliveryFee: 20, usesGps: false }));
+        flash("ไม่สามารถเข้าถึงตำแหน่งได้ กรุณากรอกที่อยู่เอง");
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 },
+    );
+  };
+
   const submitOrder = async () => {
-    if (!selectedRestaurant || !cart.length) return;
+    if (!selectedRestaurant || !cart.length || busyAction) return;
+    if (!checkoutAddress.trim()) {
+      flash("กรุณากรอกที่อยู่จัดส่ง");
+      return;
+    }
+    setBusyAction("checkout");
     try {
       const orderId = await createOrder({
         restaurantId: selectedRestaurant.id,
         address: checkoutAddress,
         note: checkoutNote,
+        latitude: checkoutLatitude,
+        longitude: checkoutLongitude,
         items: cart.map((item) => ({ id: item.id, quantity: item.quantity, note: item.note })),
       });
       setLastOrderId(orderId);
@@ -321,10 +391,14 @@ export default function MarketplaceApp() {
       flash("สั่งอาหารสำเร็จ บันทึกลง Supabase แล้ว");
     } catch (error) {
       flash(error instanceof Error ? error.message : "สร้างออเดอร์ไม่สำเร็จ");
+    } finally {
+      setBusyAction(null);
     }
   };
 
   const changeOrderStatus = async (order: Order, status: OrderStatusDb) => {
+    if (busyAction) return;
+    setBusyAction(`order-${order.dbId}`);
     try {
       await updateOrderStatus(order.dbId, status);
       setOrders((current) => current.map((item) => (item.dbId === order.dbId ? { ...item, status } : item)));
@@ -332,6 +406,8 @@ export default function MarketplaceApp() {
       flash(`อัปเดต ${order.id} เป็น “${statusText[status]}” แล้ว`);
     } catch (error) {
       flash(error instanceof Error ? error.message : "อัปเดตสถานะไม่สำเร็จ");
+    } finally {
+      setBusyAction(null);
     }
   };
 
@@ -377,7 +453,7 @@ export default function MarketplaceApp() {
       </div>
       <div className="header-actions">
         <DataBadge source={dataSource} />
-        <button className="icon-btn" aria-label="การแจ้งเตือน">
+        <button className="icon-btn" aria-label="การแจ้งเตือน" onClick={() => flash("ยังไม่มีการแจ้งเตือนใหม่") }>
           <Bell size={21} />
           <i />
         </button>
@@ -442,6 +518,12 @@ export default function MarketplaceApp() {
             setAddress={setCheckoutAddress}
             orderNote={checkoutNote}
             setOrderNote={setCheckoutNote}
+            latitude={checkoutLatitude}
+            longitude={checkoutLongitude}
+            locationState={locationState}
+            quote={deliveryQuote}
+            useCurrentLocation={useCurrentLocation}
+            busy={busyAction === "checkout"}
             updateQuantity={(id, amount) => setCart((current) => current.map((item) => (item.id === id ? { ...item, quantity: item.quantity + amount } : item)).filter((item) => item.quantity > 0))}
             updateNote={(id, note) => setCart((current) => current.map((item) => (item.id === id ? { ...item, note } : item)))}
             back={() => go(selectedRestaurant ? "restaurant" : "home")}
@@ -450,18 +532,18 @@ export default function MarketplaceApp() {
         )}
         {role === "customer" && screen === "tracking" && <TrackingPage orders={customerOrders} back={() => go("home")} />}
 
-        {role === "seller" && screen === "seller" && <SellerDashboard restaurant={sellerRestaurant} orders={orders} summary={sellerSummary} go={go} updateOrder={changeOrderStatus} />}
+        {role === "seller" && screen === "seller" && <SellerDashboard restaurant={sellerRestaurant} orders={orders} summary={sellerSummary} go={go} updateOrder={changeOrderStatus} busyAction={busyAction} />}
         {role === "seller" && screen === "seller-menu" && (
           <SellerMenu restaurant={sellerRestaurant} menu={menu.filter((item) => item.restaurantId === sellerRestaurant?.id && !item.isDeleted)} categories={categories} refresh={refreshRoleData} flash={flash} />
         )}
-        {role === "seller" && screen === "seller-orders" && <OrdersBoard orders={orders} updateOrder={changeOrderStatus} />}
+        {role === "seller" && screen === "seller-orders" && <OrdersBoard orders={orders} updateOrder={changeOrderStatus} busyAction={busyAction} />}
         {role === "seller" && screen === "seller-report" && <SellerReport summary={sellerSummary} orders={orders} />}
         {role === "seller" && screen === "seller-shop" && <ShopSettings restaurant={sellerRestaurant} refresh={refreshRoleData} flash={flash} />}
 
         {role === "admin" && screen === "admin" && <AdminDashboard summary={adminSummary} shops={adminRestaurants} orders={orders} go={go} />}
         {role === "admin" && screen === "admin-shops" && <AdminShops shops={adminRestaurants} refresh={refreshRoleData} flash={flash} />}
         {role === "admin" && screen === "admin-users" && <AdminUsers users={users} />}
-        {role === "admin" && screen === "admin-orders" && <OrdersBoard orders={orders} updateOrder={changeOrderStatus} admin />}
+        {role === "admin" && screen === "admin-orders" && <OrdersBoard orders={orders} updateOrder={changeOrderStatus} busyAction={busyAction} admin />}
         {role === "admin" && screen === "admin-gp" && <GpSettings shops={adminRestaurants} refresh={refreshRoleData} flash={flash} />}
         {role === "admin" && screen === "admin-report" && <AdminReport summary={adminSummary} />}
       </main>
@@ -471,7 +553,7 @@ export default function MarketplaceApp() {
             <Home size={21} />
             <span>หน้าหลัก</span>
           </button>
-          <button onClick={() => setQuery("")}>
+          <button onClick={() => { go("home"); setQuery(""); window.setTimeout(() => document.querySelector<HTMLInputElement>(".hero .search-box input")?.focus(), 250); }}>
             <Search size={21} />
             <span>ค้นหา</span>
           </button>
@@ -601,7 +683,7 @@ function CustomerHome({ restaurants, categories, query, setQuery, activeCategory
             <span className="kicker">ร้านอร่อยใกล้คุณ</span>
             <h2>ร้านที่เปิดขายตอนนี้</h2>
           </div>
-          <button className="text-button">
+          <button className="text-button" onClick={() => { setQuery(""); setActiveCategory("ทั้งหมด"); }}>
             ดูทั้งหมด <ChevronRight size={18} />
           </button>
         </div>
@@ -637,6 +719,7 @@ function CustomerHome({ restaurants, categories, query, setQuery, activeCategory
 }
 
 function RestaurantPage({ restaurant, categories, menu, activeCategory, setActiveCategory, query, setQuery, addToCart, back, cartCount, openCart }: any) {
+  const [detailItem, setDetailItem] = useState<MenuItem | null>(null);
   return (
     <section className="restaurant-page">
       <button className="back-button" onClick={back}>
@@ -686,6 +769,7 @@ function RestaurantPage({ restaurant, categories, menu, activeCategory, setActiv
               </header>
               <footer>
                 <b>{money(item.price)}</b>
+                <button className="menu-detail-button" onClick={() => setDetailItem(item)}>รายละเอียด</button>
                 <button onClick={() => addToCart(item)} aria-label={`เพิ่ม ${item.name}`}>
                   <Plus size={20} />
                 </button>
@@ -703,11 +787,18 @@ function RestaurantPage({ restaurant, categories, menu, activeCategory, setActiv
           <strong>ดูตะกร้า</strong>
         </button>
       )}
+      {detailItem && <div className="modal-backdrop"><div className="modal menu-detail-modal">
+        <button type="button" className="close" onClick={() => setDetailItem(null)}><X /></button>
+        <img src={detailItem.image} alt={detailItem.name} />
+        <span className="kicker">{detailItem.category}</span><h2>{detailItem.name}</h2>
+        <p>{detailItem.description}</p><strong>{money(detailItem.price)}</strong>
+        <button className="primary-button" onClick={() => { addToCart(detailItem); setDetailItem(null); }}>เพิ่มลงตะกร้า</button>
+      </div></div>}
     </section>
   );
 }
 
-function CartPage({ items, foodTotal, deliveryFee, address, setAddress, orderNote, setOrderNote, updateQuantity, updateNote, back, checkout }: any) {
+function CartPage({ items, foodTotal, deliveryFee, address, setAddress, orderNote, setOrderNote, latitude, longitude, locationState, quote, useCurrentLocation, busy, updateQuantity, updateNote, back, checkout }: any) {
   if (!items.length) {
     return (
       <section className="narrow-page">
@@ -761,8 +852,17 @@ function CartPage({ items, foodTotal, deliveryFee, address, setAddress, orderNot
           <h2>สรุปคำสั่งซื้อ</h2>
           <label className="form-field">
             ที่อยู่จัดส่ง
-            <textarea value={address} onChange={(event) => setAddress(event.target.value)} />
+            <textarea value={address} onChange={(event) => setAddress(event.target.value)} placeholder="บ้านเลขที่ หมู่บ้าน ชั้น ห้อง และจุดสังเกต" />
           </label>
+          <button className="location-button" type="button" onClick={useCurrentLocation} disabled={locationState === "loading" || busy}>
+            <MapPin size={18} />
+            {locationState === "loading" ? "กำลังขอตำแหน่ง..." : "ใช้ตำแหน่งปัจจุบัน"}
+          </button>
+          <div className={`location-feedback ${locationState}`}>
+            {locationState === "success" && <>ได้ตำแหน่งแล้ว · {Number(latitude).toFixed(5)}, {Number(longitude).toFixed(5)}</>}
+            {locationState === "error" && <>ไม่สามารถเข้าถึงตำแหน่งได้ — กรอกที่อยู่เองและใช้ค่าส่งเริ่มต้น 20 บาทได้</>}
+            {locationState === "idle" && <>ยังไม่ได้เลือก GPS — ระบบจะใช้ค่าส่งเริ่มต้น 20 บาท</>}
+          </div>
           <label className="form-field">
             หมายเหตุรวมของออเดอร์
             <textarea value={orderNote} onChange={(event) => setOrderNote(event.target.value)} placeholder="เช่น โทรก่อนถึงบ้าน" />
@@ -774,6 +874,9 @@ function CartPage({ items, foodTotal, deliveryFee, address, setAddress, orderNot
             <span>
               ค่าจัดส่ง <b>{money(deliveryFee)}</b>
             </span>
+            <span>
+              ระยะทางโดยประมาณ <b>{quote.distanceKm === null ? "ไม่มีข้อมูล GPS" : `${quote.distanceKm.toFixed(2)} กม.`}</b>
+            </span>
           </div>
           <div className="grand-total">
             <span>
@@ -782,8 +885,8 @@ function CartPage({ items, foodTotal, deliveryFee, address, setAddress, orderNot
             </span>
             <b>{money(foodTotal + deliveryFee)}</b>
           </div>
-          <button className="primary-button" onClick={checkout}>
-            ยืนยันคำสั่งซื้อ
+          <button className="primary-button" onClick={checkout} disabled={busy || !address.trim()}>
+            {busy ? "กำลังสร้างออเดอร์..." : "ยืนยันคำสั่งซื้อ"}
           </button>
         </aside>
       </div>
@@ -811,10 +914,17 @@ function TrackingPage({ orders, back }: { orders: Order[]; back: () => void }) {
               <span>{statusText[status]}</span>
             </div>
           ))}
+          <div className="tracking-summary">
+            <span>จัดส่งที่ <b>{order.address || "ไม่ระบุที่อยู่"}</b></span>
+            <span>ค่าส่ง <b>{money(order.deliveryFee)}</b></span>
+            <span>ระยะทาง <b>{order.deliveryDistanceKm === null ? "ไม่มีข้อมูล GPS" : `${order.deliveryDistanceKm.toFixed(2)} กม.`}</b></span>
+            <span>ยอดรวม <b>{money(order.total)}</b></span>
+          </div>
         </div>
       ) : (
         <EmptyState title="ยังไม่มีออเดอร์" text="เมื่อสั่งอาหารสำเร็จ ระบบจะพามาหน้านี้ทันที" />
       )}
+      {orders.length > 1 && <section className="panel order-history"><div className="panel-head"><div><h2>ประวัติคำสั่งซื้อ</h2><p>ออเดอร์ล่าสุดของคุณ</p></div></div>{orders.slice(1).map((item) => <div key={item.dbId || item.id}><span><b>{item.id}</b><small>{new Date(item.createdAt).toLocaleDateString("th-TH")} · {item.restaurant}</small></span><Status status={statusText[item.status]} /><strong>{money(item.total)}</strong></div>)}</section>}
     </section>
   );
 }
@@ -855,12 +965,22 @@ function RestaurantNotice({ restaurant }: { restaurant: Restaurant | null }) {
   return <div className="status-alert success">ร้านอนุมัติแล้ว ลูกค้าสามารถเห็นร้านและสั่งอาหารได้</div>;
 }
 
-function SellerDashboard({ restaurant, orders, summary, go, updateOrder }: any) {
+function SellerDashboard({ restaurant, orders, summary, go, updateOrder, busyAction }: any) {
   const pending = orders.find((order: Order) => order.status === "pending");
   return (
     <>
       <DashboardTop title="ภาพรวมร้านค้า" subtitle={restaurant?.name ?? "ร้านของคุณ"} />
       <RestaurantNotice restaurant={restaurant} />
+      {restaurant && (restaurant.latitude === null || restaurant.longitude === null) && (
+        <div className="location-warning">
+          <MapPin size={24} />
+          <span>
+            <b>กรุณาตั้งค่าตำแหน่งร้าน เพื่อให้ระบบคำนวณค่าส่งได้แม่นยำ</b>
+            <small>หากยังไม่ตั้งค่า ระบบจะใช้ค่าส่งเริ่มต้น 20 บาท</small>
+          </span>
+          <button onClick={() => go("seller-shop")}>ไปตั้งค่าตำแหน่งร้าน</button>
+        </div>
+      )}
       <div className="stats-grid seller-stats">
         <StatCard label="ยอดขายวันนี้" value={money(Number(summary.today?.food_total ?? 0))} change="นับเฉพาะออเดอร์สำเร็จ" icon={WalletCards} />
         <StatCard label="ออเดอร์วันนี้" value={`${summary.today?.orders ?? 0}`} change="completed เท่านั้น" icon={ShoppingBag} tone="blue" />
@@ -892,11 +1012,11 @@ function SellerDashboard({ restaurant, orders, summary, go, updateOrder }: any) 
             </div>
           </div>
           <div className="order-actions">
-            <button className="reject" onClick={() => updateOrder(pending, "rejected")}>
-              ปฏิเสธ
+            <button className="reject" disabled={busyAction === `order-${pending.dbId}`} onClick={() => updateOrder(pending, "rejected")}>
+              {busyAction === `order-${pending.dbId}` ? "กำลังบันทึก..." : "ปฏิเสธ"}
             </button>
-            <button className="accept" onClick={() => updateOrder(pending, "accepted")}>
-              รับออเดอร์
+            <button className="accept" disabled={busyAction === `order-${pending.dbId}`} onClick={() => updateOrder(pending, "accepted")}>
+              {busyAction === `order-${pending.dbId}` ? "กำลังบันทึก..." : "รับออเดอร์"}
             </button>
           </div>
         </section>
@@ -936,19 +1056,22 @@ function SellerDashboard({ restaurant, orders, summary, go, updateOrder }: any) 
 function SellerMenu({ restaurant, menu, categories, refresh, flash }: { restaurant: Restaurant | null; menu: MenuItem[]; categories: Category[]; refresh: () => Promise<void>; flash: (message: string) => void }) {
   const [editing, setEditing] = useState<MenuItem | null>(null);
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const visibleMenu = menu.filter((item) => `${item.name} ${item.description} ${item.category}`.toLowerCase().includes(query.toLowerCase()));
 
   return (
     <>
       <DashboardTop title="จัดการเมนู" subtitle="เพิ่ม แก้ไข ลบ และเปิด/ปิดการขายเมนู" />
       <RestaurantNotice restaurant={restaurant} />
       <div className="page-actions">
-        <SearchBox value="" onChange={() => null} placeholder="ค้นหาเมนู" />
+        <SearchBox value={query} onChange={setQuery} placeholder="ค้นหาเมนู" />
         <button className="primary-button fit" disabled={!restaurant} onClick={() => setOpen(true)}>
           <Plus size={19} /> เพิ่มเมนูใหม่
         </button>
       </div>
       <div className="manage-menu-grid">
-        {menu.map((item) => (
+        {visibleMenu.map((item) => (
           <article key={item.id}>
             <img src={item.image} alt={item.name} />
             <div>
@@ -960,9 +1083,16 @@ function SellerMenu({ restaurant, menu, categories, refresh, flash }: { restaura
             <footer>
               <button
                 className={item.isAvailable ? "available" : "unavailable"}
+                disabled={busyId === item.id}
                 onClick={async () => {
-                  await updateMenu(item.id, { isAvailable: !item.isAvailable });
-                  await refresh();
+                  setBusyId(item.id);
+                  try {
+                    await updateMenu(item.id, { isAvailable: !item.isAvailable });
+                    await refresh();
+                    flash(item.isAvailable ? "ปิดขายเมนูแล้ว" : "เปิดขายเมนูแล้ว");
+                  } catch (error) {
+                    flash(error instanceof Error ? error.message : "อัปเดตเมนูไม่สำเร็จ");
+                  } finally { setBusyId(null); }
                 }}
               >
                 {item.isAvailable ? <ToggleRight size={27} /> : <ToggleLeft size={27} />}
@@ -973,10 +1103,17 @@ function SellerMenu({ restaurant, menu, categories, refresh, flash }: { restaura
               </button>
               <button
                 className="ghost-button small danger"
+                disabled={busyId === item.id}
                 onClick={async () => {
-                  await deleteMenu(item.id);
-                  await refresh();
-                  flash("ลบเมนูแล้ว");
+                  if (!window.confirm(`ลบเมนู “${item.name}” ใช่หรือไม่?`)) return;
+                  setBusyId(item.id);
+                  try {
+                    await deleteMenu(item.id);
+                    await refresh();
+                    flash("ลบเมนูแล้ว");
+                  } catch (error) {
+                    flash(error instanceof Error ? error.message : "ลบเมนูไม่สำเร็จ");
+                  } finally { setBusyId(null); }
                 }}
               >
                 <Trash2 size={15} />
@@ -985,7 +1122,7 @@ function SellerMenu({ restaurant, menu, categories, refresh, flash }: { restaura
           </article>
         ))}
       </div>
-      {!menu.length && <EmptyState title="ยังไม่มีเมนู" text="เพิ่มเมนูแรกของร้านเพื่อให้ลูกค้าเริ่มสั่งได้หลังอนุมัติ" />}
+      {!visibleMenu.length && <EmptyState title={query ? "ไม่พบเมนูที่ค้นหา" : "ยังไม่มีเมนู"} text={query ? "ลองค้นหาด้วยคำอื่น" : "เพิ่มเมนูแรกของร้านเพื่อให้ลูกค้าเริ่มสั่งได้หลังอนุมัติ"} />}
       {(open || editing) && <MenuModal restaurant={restaurant} categories={categories} item={editing} onClose={() => { setOpen(false); setEditing(null); }} refresh={refresh} flash={flash} />}
     </>
   );
@@ -997,21 +1134,27 @@ function MenuModal({ restaurant, categories, item, onClose, refresh, flash }: an
   const [price, setPrice] = useState(String(item?.price ?? ""));
   const [imageUrl, setImageUrl] = useState(item?.image ?? "");
   const [categoryId, setCategoryId] = useState(item?.categoryId ?? categories[0]?.id ?? "");
+  const [busy, setBusy] = useState(false);
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!restaurant) return;
-    if (item) await updateMenu(item.id, { name, description, price: Number(price), imageUrl, categoryId });
-    else await createMenu({ restaurantId: restaurant.id, name, description, price: Number(price), imageUrl, categoryId });
-    await refresh();
-    flash(item ? "แก้ไขเมนูแล้ว" : "เพิ่มเมนูลง Supabase แล้ว");
-    onClose();
+    if (!restaurant || busy) return;
+    setBusy(true);
+    try {
+      if (item) await updateMenu(item.id, { name, description, price: Number(price), imageUrl, categoryId });
+      else await createMenu({ restaurantId: restaurant.id, name, description, price: Number(price), imageUrl, categoryId });
+      await refresh();
+      flash(item ? "แก้ไขเมนูแล้ว" : "เพิ่มเมนูลง Supabase แล้ว");
+      onClose();
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "บันทึกเมนูไม่สำเร็จ");
+    } finally { setBusy(false); }
   };
 
   return (
     <div className="modal-backdrop">
       <form className="modal" onSubmit={submit}>
-        <button type="button" className="close" onClick={onClose}>
+        <button type="button" className="close" onClick={onClose} disabled={busy}>
           <X />
         </button>
         <span className="kicker">{item ? "แก้ไขรายการอาหาร" : "เพิ่มรายการอาหาร"}</span>
@@ -1042,15 +1185,16 @@ function MenuModal({ restaurant, categories, item, onClose, refresh, flash }: an
           รูปภาพ URL
           <input value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} placeholder="https://..." />
         </label>
-        <button className="primary-button" type="submit">
-          บันทึกเมนู
+        <button className="primary-button" type="submit" disabled={busy}>
+          {busy ? "กำลังบันทึก..." : "บันทึกเมนู"}
         </button>
       </form>
     </div>
   );
 }
 
-function OrdersBoard({ orders, updateOrder, admin = false }: { orders: Order[]; updateOrder: (order: Order, status: OrderStatusDb) => Promise<void>; admin?: boolean }) {
+function OrdersBoard({ orders, updateOrder, busyAction, admin = false }: { orders: Order[]; updateOrder: (order: Order, status: OrderStatusDb) => Promise<void>; busyAction: string | null; admin?: boolean }) {
+  const [filter, setFilter] = useState<OrderStatusDb | "all">("all");
   const nextStatus = (status: OrderStatusDb): OrderStatusDb | null => {
     if (status === "pending") return "accepted";
     if (status === "accepted") return "preparing";
@@ -1063,14 +1207,15 @@ function OrdersBoard({ orders, updateOrder, admin = false }: { orders: Order[]; 
     <>
       <DashboardTop title={admin ? "ออเดอร์ทั้งหมด" : "จัดการออเดอร์"} subtitle="รับออเดอร์ ปฏิเสธ และเปลี่ยนสถานะตามลำดับ" />
       <div className="filter-tabs">
+        <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>ทั้งหมด <b>{orders.length}</b></button>
         {(["pending", "accepted", "preparing", "ready", "completed", "rejected"] as OrderStatusDb[]).map((status) => (
-          <button key={status}>
+          <button key={status} className={filter === status ? "active" : ""} onClick={() => setFilter(status)}>
             {statusText[status]} <b>{orders.filter((order) => order.status === status).length}</b>
           </button>
         ))}
       </div>
       <div className="order-board">
-        {orders.map((order) => {
+        {orders.filter((order) => filter === "all" || order.status === filter).map((order) => {
           const next = nextStatus(order.status);
           return (
             <article className={`order-card-large ${order.status === "pending" ? "highlight" : ""}`} key={order.dbId || order.id}>
@@ -1089,6 +1234,7 @@ function OrdersBoard({ orders, updateOrder, admin = false }: { orders: Order[]; 
                 <span>
                   <b>{order.customer}</b>
                   <small>{order.address || "ไม่ระบุที่อยู่"}</small>
+                  {order.deliveryDistanceKm !== null && <small>ระยะทาง {order.deliveryDistanceKm.toFixed(2)} กม. · ค่าส่ง {money(order.deliveryFee)}</small>}
                 </span>
               </div>
               <div className="order-items">
@@ -1103,13 +1249,13 @@ function OrdersBoard({ orders, updateOrder, admin = false }: { orders: Order[]; 
               </div>
               <footer>
                 {order.status === "pending" && (
-                  <button className="reject" onClick={() => updateOrder(order, "rejected")}>
-                    ปฏิเสธ
+                  <button className="reject" disabled={busyAction === `order-${order.dbId}`} onClick={() => updateOrder(order, "rejected")}>
+                    {busyAction === `order-${order.dbId}` ? "กำลังบันทึก..." : "ปฏิเสธ"}
                   </button>
                 )}
                 {next && (
-                  <button className="accept" onClick={() => updateOrder(order, next)}>
-                    {order.status === "pending" ? "รับออเดอร์" : `เปลี่ยนเป็น ${statusText[next]}`}
+                  <button className="accept" disabled={busyAction === `order-${order.dbId}`} onClick={() => updateOrder(order, next)}>
+                    {busyAction === `order-${order.dbId}` ? "กำลังบันทึก..." : order.status === "pending" ? "รับออเดอร์" : `เปลี่ยนเป็น ${statusText[next]}`}
                   </button>
                 )}
               </footer>
@@ -1157,7 +1303,12 @@ function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant |
     closeTime: restaurant?.closeTime ?? "20:00",
     image: restaurant?.image ?? "",
     isOpen: restaurant?.isOpen ?? false,
+    latitude: restaurant?.latitude === null || restaurant?.latitude === undefined ? "" : String(restaurant.latitude),
+    longitude: restaurant?.longitude === null || restaurant?.longitude === undefined ? "" : String(restaurant.longitude),
+    locationAddress: restaurant?.locationAddress ?? restaurant?.address ?? "",
   }));
+  const [busy, setBusy] = useState(false);
+  const [locating, setLocating] = useState(false);
 
   useEffect(() => {
     const syncTimer = window.setTimeout(() => {
@@ -1170,6 +1321,9 @@ function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant |
         closeTime: restaurant?.closeTime ?? "20:00",
         image: restaurant?.image ?? "",
         isOpen: restaurant?.isOpen ?? false,
+        latitude: restaurant?.latitude === null || restaurant?.latitude === undefined ? "" : String(restaurant.latitude),
+        longitude: restaurant?.longitude === null || restaurant?.longitude === undefined ? "" : String(restaurant.longitude),
+        locationAddress: restaurant?.locationAddress ?? restaurant?.address ?? "",
       });
     }, 0);
     return () => window.clearTimeout(syncTimer);
@@ -1177,12 +1331,37 @@ function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant |
 
   const update = (key: keyof typeof form, value: string | boolean) => setForm((current) => ({ ...current, [key]: value }));
 
+  const locateShop = () => {
+    if (!navigator.geolocation) { flash("อุปกรณ์นี้ไม่รองรับ GPS กรุณากรอกพิกัดเอง"); return; }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      ({ coords }) => {
+        setForm((current) => ({ ...current, latitude: String(coords.latitude), longitude: String(coords.longitude) }));
+        setLocating(false);
+        flash("ได้ตำแหน่งร้านแล้ว กดบันทึกข้อมูลร้านเพื่อยืนยัน");
+      },
+      () => { setLocating(false); flash("ไม่สามารถเข้าถึงตำแหน่งได้ กรุณาอนุญาต GPS หรือกรอกพิกัดเอง"); },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 60000 },
+    );
+  };
+
   const submit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!restaurant) return;
-    await updateSellerRestaurant(restaurant.id, form);
-    await refresh();
-    flash("บันทึกข้อมูลร้านแล้ว");
+    if (!restaurant || busy) return;
+    const latitude = form.latitude === "" ? null : Number(form.latitude);
+    const longitude = form.longitude === "" ? null : Number(form.longitude);
+    if ((latitude === null) !== (longitude === null) || (latitude !== null && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90)) || (longitude !== null && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))) {
+      flash("กรุณากรอก latitude และ longitude ให้ถูกต้องทั้งสองช่อง");
+      return;
+    }
+    setBusy(true);
+    try {
+      await updateSellerRestaurant(restaurant.id, { ...form, latitude, longitude });
+      await refresh();
+      flash("บันทึกข้อมูลร้านแล้ว");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "บันทึกข้อมูลร้านไม่สำเร็จ");
+    } finally { setBusy(false); }
   };
 
   return (
@@ -1223,12 +1402,33 @@ function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant |
               รูปร้าน URL
               <input value={form.image} onChange={(event) => update("image", event.target.value)} />
             </label>
+            <div className="location-settings full">
+              <div>
+                <b>ตำแหน่งร้าน</b>
+                <small>ใช้สำหรับคำนวณระยะทางและค่าส่ง</small>
+              </div>
+              <button className="location-button" type="button" onClick={locateShop} disabled={locating || busy}>
+                <MapPin size={18} /> {locating ? "กำลังขอตำแหน่ง..." : "ใช้ตำแหน่งร้านปัจจุบัน"}
+              </button>
+            </div>
+            <label>
+              Latitude
+              <input type="number" step="any" value={form.latitude} onChange={(event) => update("latitude", event.target.value)} placeholder="13.7563" />
+            </label>
+            <label>
+              Longitude
+              <input type="number" step="any" value={form.longitude} onChange={(event) => update("longitude", event.target.value)} placeholder="100.5018" />
+            </label>
+            <label className="full">
+              รายละเอียดตำแหน่งร้าน
+              <textarea value={form.locationAddress} onChange={(event) => update("locationAddress", event.target.value)} placeholder="ชื่ออาคาร จุดสังเกต หรือรายละเอียดเพิ่มเติม" />
+            </label>
           </div>
           <label className="toggle-line">
             <input type="checkbox" checked={form.isOpen} onChange={(event) => update("isOpen", event.target.checked)} />
             เปิดร้านรับออเดอร์
           </label>
-          <button className="primary-button fit">บันทึกข้อมูลร้าน</button>
+          <button className="primary-button fit" disabled={busy || locating}>{busy ? "กำลังบันทึก..." : "บันทึกข้อมูลร้าน"}</button>
         </form>
       )}
     </>
@@ -1280,12 +1480,20 @@ function AdminDashboard({ summary, shops, orders, go }: any) {
 
 function AdminShops({ shops, refresh, flash }: { shops: Restaurant[]; refresh: () => Promise<void>; flash: (message: string) => void }) {
   const [filter, setFilter] = useState<RestaurantStatus | "all">("all");
+  const [editing, setEditing] = useState<Restaurant | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const visible = filter === "all" ? shops : shops.filter((shop) => shop.status === filter);
 
   const changeShop = async (shop: Restaurant, input: Partial<{ status: RestaurantStatus; gpPercent: number }>) => {
-    await updateRestaurantAdmin(shop.id, input);
-    await refresh();
-    flash("อัปเดตร้านค้าแล้ว");
+    if (busyId) return;
+    setBusyId(shop.id);
+    try {
+      await updateRestaurantAdmin(shop.id, input);
+      await refresh();
+      flash("อัปเดตร้านค้าแล้ว");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "อัปเดตร้านค้าไม่สำเร็จ");
+    } finally { setBusyId(null); }
   };
 
   return (
@@ -1307,6 +1515,7 @@ function AdminShops({ shops, refresh, flash }: { shops: Restaurant[]; refresh: (
                 <th>เจ้าของ/ติดต่อ</th>
                 <th>เวลาเปิด</th>
                 <th>สถานะ</th>
+                <th>พิกัด</th>
                 <th>GP</th>
                 <th>จัดการ</th>
               </tr>
@@ -1333,8 +1542,9 @@ function AdminShops({ shops, refresh, flash }: { shops: Restaurant[]; refresh: (
                   <td>
                     <ShopStatus status={shop.status} />
                   </td>
+                  <td><span className={`location-chip ${shop.latitude !== null && shop.longitude !== null ? "ready" : "missing"}`}>{shop.latitude !== null && shop.longitude !== null ? "มีพิกัด" : "ยังไม่มีพิกัด"}</span></td>
                   <td>
-                    <select value={shop.gpPercent} onChange={(event) => changeShop(shop, { gpPercent: Number(event.target.value) })}>
+                    <select disabled={busyId === shop.id} value={shop.gpPercent} onChange={(event) => changeShop(shop, { gpPercent: Number(event.target.value) })}>
                       {[10, 15, 20, 25].map((value) => (
                         <option key={value} value={value}>
                           {value}%
@@ -1345,15 +1555,16 @@ function AdminShops({ shops, refresh, flash }: { shops: Restaurant[]; refresh: (
                   <td>
                     <div className="table-actions">
                       {shop.status !== "approved" && (
-                        <button className="small-primary" onClick={() => changeShop(shop, { status: "approved" })}>
-                          อนุมัติ
+                        <button className="small-primary" disabled={busyId === shop.id} onClick={() => changeShop(shop, { status: "approved" })}>
+                          {busyId === shop.id ? "กำลังบันทึก..." : "อนุมัติ"}
                         </button>
                       )}
                       {shop.status !== "suspended" && (
-                        <button className="ghost-button small danger" onClick={() => changeShop(shop, { status: "suspended" })}>
+                        <button className="ghost-button small danger" disabled={busyId === shop.id} onClick={() => changeShop(shop, { status: "suspended" })}>
                           ระงับ
                         </button>
                       )}
+                      <button className="ghost-button small" onClick={() => setEditing(shop)}>ดูรายละเอียด</button>
                     </div>
                   </td>
                 </tr>
@@ -1362,8 +1573,39 @@ function AdminShops({ shops, refresh, flash }: { shops: Restaurant[]; refresh: (
           </table>
         </div>
       </section>
+      {editing && <ShopLocationModal shop={editing} onClose={() => setEditing(null)} refresh={refresh} flash={flash} />}
     </>
   );
+}
+
+function ShopLocationModal({ shop, onClose, refresh, flash }: { shop: Restaurant; onClose: () => void; refresh: () => Promise<void>; flash: (message: string) => void }) {
+  const [latitude, setLatitude] = useState(shop.latitude === null ? "" : String(shop.latitude));
+  const [longitude, setLongitude] = useState(shop.longitude === null ? "" : String(shop.longitude));
+  const [locationAddress, setLocationAddress] = useState(shop.locationAddress);
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    const lat = latitude === "" ? null : Number(latitude);
+    const lng = longitude === "" ? null : Number(longitude);
+    if ((lat === null) !== (lng === null) || (lat !== null && (!Number.isFinite(lat) || lat < -90 || lat > 90)) || (lng !== null && (!Number.isFinite(lng) || lng < -180 || lng > 180))) {
+      flash("กรุณากรอกพิกัดให้ถูกต้องทั้งสองช่อง"); return;
+    }
+    setBusy(true);
+    try {
+      await updateRestaurantAdmin(shop.id, { latitude: lat, longitude: lng, locationAddress });
+      await refresh(); flash("บันทึกพิกัดร้านแล้ว"); onClose();
+    } catch (error) { flash(error instanceof Error ? error.message : "บันทึกพิกัดไม่สำเร็จ"); }
+    finally { setBusy(false); }
+  };
+  return <div className="modal-backdrop"><form className="modal" onSubmit={submit}>
+    <button type="button" className="close" onClick={onClose} disabled={busy}><X /></button>
+    <span className="kicker">รายละเอียดร้านค้า</span><h2>{shop.name}</h2>
+    <p className="modal-detail">{shop.address || "ไม่ระบุที่อยู่"}<br />{shop.phone || "ไม่ระบุเบอร์โทร"}</p>
+    <label>Latitude<input type="number" step="any" value={latitude} onChange={(event) => setLatitude(event.target.value)} placeholder="13.7563" /></label>
+    <label>Longitude<input type="number" step="any" value={longitude} onChange={(event) => setLongitude(event.target.value)} placeholder="100.5018" /></label>
+    <label>รายละเอียดตำแหน่ง<textarea value={locationAddress} onChange={(event) => setLocationAddress(event.target.value)} /></label>
+    <button className="primary-button" type="submit" disabled={busy}>{busy ? "กำลังบันทึก..." : "บันทึกพิกัดร้าน"}</button>
+  </form></div>;
 }
 
 function AdminUsers({ users }: { users: ProfileRow[] }) {
@@ -1408,6 +1650,8 @@ function AdminUsers({ users }: { users: ProfileRow[] }) {
 }
 
 function GpSettings({ shops, refresh, flash }: { shops: Restaurant[]; refresh: () => Promise<void>; flash: (message: string) => void }) {
+  const [drafts, setDrafts] = useState<Record<string, number>>(() => Object.fromEntries(shops.map((shop) => [shop.id, shop.gpPercent])));
+  const [busyId, setBusyId] = useState<string | null>(null);
   return (
     <>
       <DashboardTop title="ตั้งค่าค่า GP" subtitle="ค่า GP ถูก snapshot ลงออเดอร์เมื่อ customer สั่งอาหาร" />
@@ -1431,12 +1675,9 @@ function GpSettings({ shops, refresh, flash }: { shops: Restaurant[]; refresh: (
                 <small>{shopStatusText[shop.status]}</small>
               </span>
               <select
-                value={shop.gpPercent}
-                onChange={async (event) => {
-                  await updateRestaurantAdmin(shop.id, { gpPercent: Number(event.target.value) });
-                  await refresh();
-                  flash("บันทึกค่า GP แล้ว");
-                }}
+                value={drafts[shop.id] ?? shop.gpPercent}
+                disabled={busyId === shop.id}
+                onChange={(event) => setDrafts((current) => ({ ...current, [shop.id]: Number(event.target.value) }))}
               >
                 {[10, 15, 20, 25].map((value) => (
                   <option key={value} value={value}>
@@ -1444,6 +1685,14 @@ function GpSettings({ shops, refresh, flash }: { shops: Restaurant[]; refresh: (
                   </option>
                 ))}
               </select>
+              <button className="small-primary" disabled={busyId === shop.id || (drafts[shop.id] ?? shop.gpPercent) === shop.gpPercent} onClick={async () => {
+                setBusyId(shop.id);
+                try {
+                  await updateRestaurantAdmin(shop.id, { gpPercent: drafts[shop.id] ?? shop.gpPercent });
+                  await refresh(); flash("บันทึกค่า GP แล้ว");
+                } catch (error) { flash(error instanceof Error ? error.message : "บันทึกค่า GP ไม่สำเร็จ"); }
+                finally { setBusyId(null); }
+              }}>{busyId === shop.id ? "กำลังบันทึก..." : "บันทึก GP"}</button>
               <strong>
                 GP ปัจจุบัน
                 <br />
@@ -1458,13 +1707,19 @@ function GpSettings({ shops, refresh, flash }: { shops: Restaurant[]; refresh: (
 }
 
 function AdminReport({ summary }: { summary: typeof emptyAdminSummary }) {
+  const [period, setPeriod] = useState<"today" | "month">("today");
+  const selected = summary[period] ?? summary.today;
   return (
     <>
       <DashboardTop title="รายงานระบบ" subtitle="ยอดขายรวม GP รวม ร้านขายดี และเมนูขายดี" />
+      <div className="filter-tabs">
+        <button className={period === "today" ? "active" : ""} onClick={() => setPeriod("today")}>วันนี้</button>
+        <button className={period === "month" ? "active" : ""} onClick={() => setPeriod("month")}>เดือนนี้</button>
+      </div>
       <div className="stats-grid">
-        <StatCard label="ยอดขายวันนี้" value={money(Number(summary.today?.food_total ?? 0))} change={`${summary.today?.orders ?? 0} ออเดอร์`} icon={WalletCards} />
-        <StatCard label="GP วันนี้" value={money(Number(summary.today?.gp_amount ?? 0))} change="รายได้ระบบ" icon={CircleDollarSign} tone="purple" />
-        <StatCard label="ยอดขายเดือนนี้" value={money(Number(summary.month?.food_total ?? 0))} change={`GP ${money(Number(summary.month?.gp_amount ?? 0))}`} icon={BarChart3} tone="green" />
+        <StatCard label={period === "today" ? "ยอดขายวันนี้" : "ยอดขายเดือนนี้"} value={money(Number(selected?.food_total ?? 0))} change={`${selected?.orders ?? 0} ออเดอร์`} icon={WalletCards} />
+        <StatCard label={period === "today" ? "GP วันนี้" : "GP เดือนนี้"} value={money(Number(selected?.gp_amount ?? 0))} change="รายได้ระบบ" icon={CircleDollarSign} tone="purple" />
+        <StatCard label="รายได้สุทธิร้าน" value={money(Number(selected?.net_income ?? 0))} change="หลังหัก GP" icon={BarChart3} tone="green" />
       </div>
       <div className="stats-grid">
         <StatCard label="ร้าน pending" value={`${summary.restaurants?.pending ?? 0}`} change="รอตรวจสอบ" icon={Store} />

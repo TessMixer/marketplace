@@ -29,6 +29,10 @@ export type Restaurant = {
   rating: number;
   delivery: number;
   time: string;
+  latitude: number | null;
+  longitude: number | null;
+  locationAddress: string;
+  locationUpdatedAt: string | null;
   createdAt: string;
 };
 
@@ -67,6 +71,18 @@ export type Order = {
   createdAt: string;
   note: string;
   address: string;
+  deliveryLatitude: number | null;
+  deliveryLongitude: number | null;
+  restaurantLatitude: number | null;
+  restaurantLongitude: number | null;
+  deliveryDistanceKm: number | null;
+};
+
+export type DeliveryQuote = {
+  distanceKm: number | null;
+  deliveryFee: number;
+  restaurantHasLocation: boolean;
+  usesGps: boolean;
 };
 
 export type ProfileRow = {
@@ -104,6 +120,10 @@ function mapRestaurant(row: any): Restaurant {
     rating: Number(row.rating ?? 0),
     delivery: Number(row.delivery_fee ?? 0),
     time: row.delivery_minutes ?? "20-30 นาที",
+    latitude: row.latitude === null || row.latitude === undefined ? null : Number(row.latitude),
+    longitude: row.longitude === null || row.longitude === undefined ? null : Number(row.longitude),
+    locationAddress: row.location_address ?? row.address ?? "",
+    locationUpdatedAt: row.location_updated_at ?? null,
     createdAt: row.created_at,
   };
 }
@@ -152,7 +172,12 @@ function mapOrder(row: any): Order {
     time: new Date(row.created_at).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }),
     createdAt: row.created_at,
     note: row.customer_note ?? "",
-    address: row.address ?? "",
+    address: row.delivery_address ?? row.address ?? "",
+    deliveryLatitude: row.delivery_latitude === null || row.delivery_latitude === undefined ? null : Number(row.delivery_latitude),
+    deliveryLongitude: row.delivery_longitude === null || row.delivery_longitude === undefined ? null : Number(row.delivery_longitude),
+    restaurantLatitude: row.restaurant_latitude === null || row.restaurant_latitude === undefined ? null : Number(row.restaurant_latitude),
+    restaurantLongitude: row.restaurant_longitude === null || row.restaurant_longitude === undefined ? null : Number(row.restaurant_longitude),
+    deliveryDistanceKm: row.delivery_distance_km === null || row.delivery_distance_km === undefined ? null : Number(row.delivery_distance_km),
   };
 }
 
@@ -218,16 +243,20 @@ export async function listAdminRestaurants() {
   return (data ?? []).map(mapRestaurant);
 }
 
-export async function updateRestaurantAdmin(id: string, input: Partial<{ status: RestaurantStatus; gpPercent: number }>) {
+export async function updateRestaurantAdmin(id: string, input: Partial<{ status: RestaurantStatus; gpPercent: number; latitude: number | null; longitude: number | null; locationAddress: string }>) {
   const client = requireClient();
   const payload: Record<string, unknown> = {};
   if (input.status) payload.status = input.status;
   if (input.gpPercent !== undefined) payload.gp_percent = input.gpPercent;
+  if (input.latitude !== undefined) payload.latitude = input.latitude;
+  if (input.longitude !== undefined) payload.longitude = input.longitude;
+  if (input.locationAddress !== undefined) payload.location_address = input.locationAddress;
+  if (input.latitude !== undefined || input.longitude !== undefined) payload.location_updated_at = new Date().toISOString();
   const { error } = await client.from("restaurants").update(payload).eq("id", id);
   if (error) throw error;
 }
 
-export async function updateSellerRestaurant(id: string, input: Partial<Pick<Restaurant, "name" | "description" | "phone" | "address" | "openTime" | "closeTime" | "isOpen" | "image">>) {
+export async function updateSellerRestaurant(id: string, input: Partial<Pick<Restaurant, "name" | "description" | "phone" | "address" | "openTime" | "closeTime" | "isOpen" | "image" | "latitude" | "longitude" | "locationAddress">>) {
   const client = requireClient();
   const payload: Record<string, unknown> = {};
   if (input.name !== undefined) payload.name = input.name;
@@ -238,6 +267,10 @@ export async function updateSellerRestaurant(id: string, input: Partial<Pick<Res
   if (input.closeTime !== undefined) payload.close_time = input.closeTime;
   if (input.isOpen !== undefined) payload.is_open = input.isOpen;
   if (input.image !== undefined) payload.image_url = input.image;
+  if (input.latitude !== undefined) payload.latitude = input.latitude;
+  if (input.longitude !== undefined) payload.longitude = input.longitude;
+  if (input.locationAddress !== undefined) payload.location_address = input.locationAddress;
+  if (input.latitude !== undefined || input.longitude !== undefined) payload.location_updated_at = new Date().toISOString();
   const { error } = await client.from("restaurants").update(payload).eq("id", id);
   if (error) throw error;
 }
@@ -257,17 +290,38 @@ export async function createOrder(input: {
   restaurantId: string;
   address: string;
   note: string;
+  latitude: number | null;
+  longitude: number | null;
   items: Array<{ id: string; quantity: number; note: string }>;
 }) {
   const client = requireClient();
   const { data, error } = await client.rpc("create_order_with_gp", {
     p_restaurant_id: input.restaurantId,
     p_delivery_address: input.address,
+    p_delivery_latitude: input.latitude,
+    p_delivery_longitude: input.longitude,
     p_customer_note: input.note,
     p_items: input.items.map((item) => ({ menu_item_id: item.id, quantity: item.quantity, note: item.note })),
   });
   if (error) throw error;
   return data as string;
+}
+
+export async function getDeliveryQuote(restaurantId: string, latitude: number | null, longitude: number | null): Promise<DeliveryQuote> {
+  const client = requireClient();
+  const { data, error } = await client.rpc("calculate_delivery_quote", {
+    p_restaurant_id: restaurantId,
+    p_delivery_latitude: latitude,
+    p_delivery_longitude: longitude,
+  });
+  if (error) throw error;
+  const row = data as Record<string, unknown>;
+  return {
+    distanceKm: row.distance_km === null || row.distance_km === undefined ? null : Number(row.distance_km),
+    deliveryFee: Number(row.delivery_fee ?? 20),
+    restaurantHasLocation: Boolean(row.restaurant_has_location),
+    usesGps: Boolean(row.uses_gps),
+  };
 }
 
 export async function updateOrderStatus(dbId: string | undefined, status: OrderStatusDb) {
