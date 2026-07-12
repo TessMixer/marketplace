@@ -9,7 +9,7 @@ export type Profile = { id:string; auth_user_id:string; name:string; phone:strin
 export type RegisterInput = { name:string; phone:string; email:string; password:string; role:"customer"|"seller"; restaurantName?:string; restaurantDescription?:string; restaurantPhone?:string; restaurantAddress?:string; openTime?:string; closeTime?:string };
 
 type AuthContextValue = {
-  session:Session|null; user:User|null; profile:Profile|null; loading:boolean; configured:boolean;
+  session:Session|null; user:User|null; profile:Profile|null; profileError:string|null; loading:boolean; configured:boolean;
   signIn:(email:string,password:string)=>Promise<void>;
   register:(input:RegisterInput)=>Promise<{needsEmailConfirmation:boolean}>;
   signOut:()=>Promise<void>; refreshProfile:()=>Promise<void>;
@@ -27,22 +27,31 @@ async function loadProfile(userId:string) {
 export function AuthProvider({children}:{children:React.ReactNode}) {
   const [session,setSession]=useState<Session|null>(null);
   const [profile,setProfile]=useState<Profile|null>(null);
+  const [profileError,setProfileError]=useState<string|null>(null);
   const [loading,setLoading]=useState(isSupabaseConfigured);
 
-  const refreshProfile=async()=>{ if(session?.user) setProfile(await loadProfile(session.user.id)); };
+  const refreshProfile=async()=>{
+    if(!session?.user) return;
+    setLoading(true); setProfileError(null);
+    try { setProfile(await loadProfile(session.user.id)); }
+    catch(caught) { setProfile(null); setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้"); }
+    finally { setLoading(false); }
+  };
 
   useEffect(()=>{
     if(!supabase) return;
     supabase.auth.getSession().then(async({data})=>{
       setSession(data.session);
-      if(data.session?.user) setProfile(await loadProfile(data.session.user.id).catch(()=>null));
+      if(data.session?.user) {
+        try { setProfile(await loadProfile(data.session.user.id)); setProfileError(null); }
+        catch(caught) { setProfile(null); setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้"); }
+      }
       setLoading(false);
     });
     const {data:{subscription}}=supabase.auth.onAuthStateChange((_event,nextSession)=>{
       setSession(nextSession);
-      if(nextSession?.user) window.setTimeout(()=>loadProfile(nextSession.user.id).then(setProfile).catch(()=>setProfile(null)),0);
-      else setProfile(null);
-      setLoading(false);
+      if(nextSession?.user) window.setTimeout(()=>loadProfile(nextSession.user.id).then(nextProfile=>{setProfile(nextProfile);setProfileError(null);}).catch(caught=>{setProfile(null);setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้");}).finally(()=>setLoading(false)),0);
+      else { setProfile(null); setProfileError(null); setLoading(false); }
     });
     return()=>subscription.unsubscribe();
   },[]);
@@ -52,7 +61,8 @@ export function AuthProvider({children}:{children:React.ReactNode}) {
     const {data,error}=await supabase.auth.signInWithPassword({email,password});
     if(error) throw error;
     setSession(data.session);
-    setProfile(await loadProfile(data.user.id));
+    try { setProfile(await loadProfile(data.user.id)); setProfileError(null); }
+    catch(caught) { setProfile(null); setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้"); throw caught; }
   };
 
   const register=async(input:RegisterInput)=>{
@@ -68,9 +78,9 @@ export function AuthProvider({children}:{children:React.ReactNode}) {
     return {needsEmailConfirmation:!data.session};
   };
 
-  const signOut=async()=>{ if(supabase) await supabase.auth.signOut(); setSession(null); setProfile(null); };
+  const signOut=async()=>{ if(supabase) await supabase.auth.signOut(); setSession(null); setProfile(null); setProfileError(null); };
 
-  return <AuthContext.Provider value={{session,user:session?.user??null,profile,loading,configured:isSupabaseConfigured,signIn,register,signOut,refreshProfile}}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{session,user:session?.user??null,profile,profileError,loading,configured:isSupabaseConfigured,signIn,register,signOut,refreshProfile}}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(){ const context=useContext(AuthContext); if(!context) throw new Error("useAuth must be used within AuthProvider"); return context; }

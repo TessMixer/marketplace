@@ -19,7 +19,7 @@ type CartItem = (typeof initialMenu)[number] & { quantity: number; note: string 
 const IconLogo = () => <div className="logo-mark"><UtensilsCrossed size={20} strokeWidth={2.6} /></div>;
 
 export default function MarketplaceApp() {
-  const { session, profile, loading: authLoading, configured, signOut } = useAuth();
+  const { session, profile, profileError, loading: authLoading, configured, signOut, refreshProfile } = useAuth();
   const [role, setRole] = useState<Role>("customer");
   const [screen, setScreen] = useState<Screen>("home");
   const [activeCategory, setActiveCategory] = useState("ทั้งหมด");
@@ -135,6 +135,7 @@ export default function MarketplaceApp() {
 
   if(authLoading) return <div className="auth-loading"><IconLogo/><span>กำลังตรวจสอบบัญชี...</span></div>;
   if(configured&&!session) return <AuthScreen/>;
+  if(configured&&session&&!profile) return <div className="auth-loading auth-profile-error"><IconLogo/><h1>โหลดสิทธิ์ผู้ใช้ไม่สำเร็จ</h1><p>{profileError||"ไม่พบข้อมูล Profile ของบัญชีนี้"}</p><div><button onClick={refreshProfile}>ลองอีกครั้ง</button><button className="secondary" onClick={signOut}>ออกจากระบบ</button></div></div>;
 
   return (
     <div className={role === "customer" ? "app customer-app" : "app dashboard-app"}>
