@@ -1,240 +1,1598 @@
 "use client";
 
-import { useEffect, useState } from "react";
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+import { FormEvent, useEffect, useState } from "react";
 import {
-  ArrowLeft, BarChart3, Bell, Check, ChevronRight, CircleDollarSign, Clock3, CookingPot,
-  Home, LayoutDashboard, MapPin, Menu as MenuIcon, Minus, PackageCheck, Plus, Search,
-  Settings, ShieldCheck, ShoppingBag, ShoppingCart, Star, Store, ToggleLeft, ToggleRight, LogOut,
-  Truck, UserRound, Users, UtensilsCrossed, WalletCards, X,
+  ArrowLeft,
+  BarChart3,
+  Bell,
+  Check,
+  ChevronRight,
+  CircleDollarSign,
+  Clock3,
+  CookingPot,
+  Home,
+  LayoutDashboard,
+  LogOut,
+  MapPin,
+  Minus,
+  PackageCheck,
+  Plus,
+  Search,
+  Settings,
+  ShieldCheck,
+  ShoppingBag,
+  ShoppingCart,
+  Star,
+  Store,
+  ToggleLeft,
+  ToggleRight,
+  Trash2,
+  Truck,
+  UserRound,
+  Users,
+  UtensilsCrossed,
+  WalletCards,
+  X,
 } from "lucide-react";
-import { categories, initialMenu, initialOrders, money, restaurants, Role, OrderStatus } from "../data/mockData";
-import { isSupabaseConfigured } from "../lib/supabase";
-import { createMenu, createOrder, getCatalog, getOrders, getSellerWorkspace, setMenuAvailability, updateOrderStatus } from "../services/marketplaceRepository";
-import { useAuth } from "../auth/AuthProvider";
 import AuthScreen from "../auth/AuthScreen";
+import { useAuth } from "../auth/AuthProvider";
+import { categories as mockCategories, initialMenu, initialOrders, money, restaurants as mockRestaurants, Role } from "../data/mockData";
+import { isSupabaseConfigured } from "../lib/supabase";
+import {
+  Category,
+  createMenu,
+  createOrder,
+  deleteMenu,
+  getAdminReport,
+  getCatalog,
+  getCategories,
+  getOrders,
+  getProfiles,
+  getSellerReport,
+  getSellerWorkspace,
+  listAdminRestaurants,
+  MenuItem,
+  Order,
+  OrderStatusDb,
+  ProfileRow,
+  Restaurant,
+  RestaurantStatus,
+  updateMenu,
+  updateOrderStatus,
+  updateRestaurantAdmin,
+  updateSellerRestaurant,
+} from "../services/marketplaceRepository";
 
-type Screen = "home" | "restaurant" | "cart" | "tracking" | "seller" | "seller-menu" | "seller-orders" | "seller-report" | "seller-shop" | "admin" | "admin-shops" | "admin-users" | "admin-orders" | "admin-gp" | "admin-report";
-type CartItem = (typeof initialMenu)[number] & { quantity: number; note: string };
+type Screen =
+  | "home"
+  | "restaurant"
+  | "cart"
+  | "tracking"
+  | "seller"
+  | "seller-menu"
+  | "seller-orders"
+  | "seller-report"
+  | "seller-shop"
+  | "admin"
+  | "admin-shops"
+  | "admin-users"
+  | "admin-orders"
+  | "admin-gp"
+  | "admin-report";
 
-const IconLogo = () => <div className="logo-mark"><UtensilsCrossed size={20} strokeWidth={2.6} /></div>;
+type CartItem = MenuItem & { quantity: number; note: string };
+
+const IconLogo = () => (
+  <div className="logo-mark">
+    <UtensilsCrossed size={20} strokeWidth={2.6} />
+  </div>
+);
+
+const statusText: Record<OrderStatusDb, string> = {
+  pending: "รอร้านรับออเดอร์",
+  accepted: "ร้านรับออเดอร์แล้ว",
+  preparing: "กำลังทำอาหาร",
+  ready: "พร้อมส่ง",
+  completed: "สำเร็จ",
+  rejected: "ร้านปฏิเสธ",
+  cancelled: "ยกเลิก",
+};
+
+const shopStatusText: Record<RestaurantStatus, string> = {
+  pending: "รออนุมัติ",
+  approved: "อนุมัติแล้ว",
+  suspended: "ระงับ",
+};
+
+const roleLabel = (role: Role) => (role === "customer" ? "ลูกค้า" : role === "seller" ? "ผู้ขาย" : "ผู้ดูแลระบบ");
+
+function toRestaurant(row: (typeof mockRestaurants)[number]): Restaurant {
+  return {
+    id: row.id,
+    ownerId: null,
+    name: row.name,
+    description: row.description,
+    image: row.image,
+    address: "",
+    phone: "",
+    openTime: "08:00",
+    closeTime: "20:00",
+    isOpen: row.isOpen,
+    status: row.status as RestaurantStatus,
+    gpPercent: row.gpPercent,
+    rating: row.rating,
+    delivery: row.delivery,
+    time: row.time,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function toMenuItem(row: (typeof initialMenu)[number]): MenuItem {
+  return {
+    id: row.id,
+    restaurantId: row.restaurantId,
+    categoryId: null,
+    category: row.category,
+    name: row.name,
+    description: row.description,
+    price: row.price,
+    image: row.image,
+    isAvailable: row.isAvailable,
+    isDeleted: false,
+    popular: row.popular,
+    createdAt: new Date().toISOString(),
+  };
+}
+
+function toOrder(row: (typeof initialOrders)[number]): Order {
+  return {
+    id: row.id,
+    dbId: "",
+    orderNumber: Number(row.id.replace(/\D/g, "")),
+    customer: row.customer,
+    restaurant: row.restaurant,
+    restaurantId: "r1",
+    items: row.items,
+    itemDetails: [],
+    foodTotal: row.foodTotal,
+    deliveryFee: row.deliveryFee,
+    gpPercent: row.gpPercent,
+    gpAmount: row.gpAmount,
+    net: row.net,
+    total: row.total,
+    status: "pending",
+    time: row.time,
+    createdAt: new Date().toISOString(),
+    note: row.note,
+    address: "บ้าน · สุขุมวิท 49",
+  };
+}
+
+const emptySellerSummary = {
+  today: { orders: 0, food_total: 0, gp_amount: 0, net_income: 0 },
+  month: { orders: 0, food_total: 0, gp_amount: 0, net_income: 0 },
+  last_7_days: [] as Array<{ label: string; food_total: number; gp_amount: number; net_income: number }>,
+};
+
+const emptyAdminSummary = {
+  today: { orders: 0, food_total: 0, gp_amount: 0, net_income: 0 },
+  month: { orders: 0, food_total: 0, gp_amount: 0, net_income: 0 },
+  restaurants: { pending: 0, approved: 0, suspended: 0 },
+  top_restaurants: [] as Array<{ id: string; name: string; food_total: number; orders: number }>,
+  top_menu_items: [] as Array<{ name: string; quantity: number; food_total: number }>,
+};
 
 export default function MarketplaceApp() {
   const { session, profile, profileError, loading: authLoading, configured, signOut, refreshProfile } = useAuth();
-  const [role, setRole] = useState<Role>("customer");
   const [screen, setScreen] = useState<Screen>("home");
-  const [activeCategory, setActiveCategory] = useState("ทั้งหมด");
   const [query, setQuery] = useState("");
-  const [shopData, setShopData] = useState<any[]>(restaurants);
-  const [selectedRestaurant, setSelectedRestaurant] = useState<any>(restaurants[0]);
-  const [menu, setMenu] = useState<any[]>(initialMenu);
-  const [orders, setOrders] = useState<any[]>(initialOrders);
+  const [activeCategory, setActiveCategory] = useState("ทั้งหมด");
+  const [restaurants, setRestaurants] = useState<Restaurant[]>(mockRestaurants.map(toRestaurant).filter((r) => r.status === "approved"));
+  const [adminRestaurants, setAdminRestaurants] = useState<Restaurant[]>(mockRestaurants.map(toRestaurant));
+  const [categories, setCategories] = useState<Category[]>(mockCategories.slice(1).map((name) => ({ id: name, name, icon: null })));
+  const [menu, setMenu] = useState<MenuItem[]>(initialMenu.map(toMenuItem));
+  const [orders, setOrders] = useState<Order[]>(initialOrders.map(toOrder));
+  const [users, setUsers] = useState<ProfileRow[]>([]);
+  const [sellerRestaurant, setSellerRestaurant] = useState<Restaurant | null>(null);
+  const [selectedRestaurant, setSelectedRestaurant] = useState<Restaurant | null>(restaurants[0] ?? null);
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [checkoutAddress, setCheckoutAddress] = useState("บ้าน · สุขุมวิท 49");
+  const [checkoutNote, setCheckoutNote] = useState("");
+  const [lastOrderId, setLastOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
-  const [showMenuForm, setShowMenuForm] = useState(false);
-  const [gp, setGp] = useState<Record<string, number>>(Object.fromEntries(restaurants.map((r) => [r.id, r.gpPercent])));
   const [dataSource, setDataSource] = useState<"loading" | "supabase" | "mock">(isSupabaseConfigured ? "loading" : "mock");
+  const [sellerSummary, setSellerSummary] = useState(emptySellerSummary);
+  const [adminSummary, setAdminSummary] = useState(emptyAdminSummary);
+
+  const role = profile?.role ?? "customer";
+
+  const go = (next: Screen) => {
+    const allowed =
+      role === "admin"
+        ? next.startsWith("admin")
+        : role === "seller"
+          ? next.startsWith("seller")
+          : ["home", "restaurant", "cart", "tracking"].includes(next);
+    setScreen(allowed ? next : role === "admin" ? "admin" : role === "seller" ? "seller" : "home");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+
+  const flash = (message: string) => {
+    setToast(message);
+    window.setTimeout(() => setToast(""), 2400);
+  };
+
+  const loadSharedData = async () => {
+    if (!isSupabaseConfigured) return;
+    const [categoryRows, catalog, orderRows] = await Promise.all([getCategories(), getCatalog(), getOrders()]);
+    setCategories(categoryRows);
+    setRestaurants(catalog.restaurants);
+    setMenu(catalog.menu);
+    setOrders(orderRows);
+    setSelectedRestaurant((current) => catalog.restaurants.find((shop) => shop.id === current?.id) ?? catalog.restaurants[0] ?? null);
+    setDataSource("supabase");
+  };
+
+  const loadSellerData = async () => {
+    if (!profile) return;
+    const [workspace, orderRows] = await Promise.all([getSellerWorkspace(profile.id), getOrders()]);
+    setSellerRestaurant(workspace.restaurant);
+    if (workspace.restaurant) {
+      setRestaurants([workspace.restaurant]);
+      setSelectedRestaurant(workspace.restaurant);
+      setMenu(workspace.menu);
+      setSellerSummary(await getSellerReport(workspace.restaurant.id));
+    }
+    setOrders(orderRows);
+    setDataSource("supabase");
+  };
+
+  const loadAdminData = async () => {
+    const [shopRows, orderRows, profileRows, report] = await Promise.all([listAdminRestaurants(), getOrders(), getProfiles(), getAdminReport()]);
+    setAdminRestaurants(shopRows);
+    setOrders(orderRows);
+    setUsers(profileRows);
+    setAdminSummary(report);
+    setDataSource("supabase");
+  };
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
-    if (!isSupabaseConfigured) return;
-    Promise.all([getCatalog(), getOrders()]).then(([catalog, databaseOrders]) => {
-      if (catalog.restaurants.length) {
-        setShopData(catalog.restaurants);
-        setMenu(catalog.menu);
-        setSelectedRestaurant(catalog.restaurants[0]);
-        setGp(Object.fromEntries(catalog.restaurants.map((r:any) => [r.id, r.gpPercent])));
-      }
-      if (databaseOrders.length) setOrders(databaseOrders);
-      setDataSource("supabase");
-    }).catch(() => setDataSource("mock"));
   }, []);
 
-  useEffect(()=>{
-    if(!profile) return;
-    const redirectTimer=window.setTimeout(()=>{
-      setRole(profile.role);
-      setScreen(profile.role==="customer"?"home":profile.role==="seller"?"seller":"admin");
-    },0);
-    getOrders().then(databaseOrders=>{ if(databaseOrders.length) setOrders(databaseOrders); }).catch(()=>undefined);
-    if(profile.role==="seller") getSellerWorkspace(profile.id).then(workspace=>{
-      setShopData([workspace.restaurant]); setSelectedRestaurant(workspace.restaurant); setMenu(workspace.menu); setDataSource("supabase");
-    }).catch(()=>undefined);
-    return()=>window.clearTimeout(redirectTimer);
-  },[profile]);
+  useEffect(() => {
+    if (!configured || !session || !profile) return;
+    const nextScreen = profile.role === "admin" ? "admin" : profile.role === "seller" ? "seller" : "home";
+    const redirectTimer = window.setTimeout(() => setScreen(nextScreen), 0);
+    const loader = profile.role === "admin" ? loadAdminData : profile.role === "seller" ? loadSellerData : loadSharedData;
+    loader().catch(() => setDataSource("mock"));
+    return () => window.clearTimeout(redirectTimer);
+  }, [configured, session, profile]);
 
-  const go = (next: Screen) => { setScreen(next); window.scrollTo({ top: 0, behavior: "smooth" }); };
-  const flash = (message: string) => { setToast(message); window.setTimeout(() => setToast(""), 2200); };
-  const switchRole = (next: Role) => {
-    if(profile&&next!==profile.role){ flash("บัญชีนี้ไม่มีสิทธิ์เข้าสู่หน้าดังกล่าว"); return; }
-    setRole(next); go(next === "customer" ? "home" : next === "seller" ? "seller" : "admin");
+  const refreshRoleData = async () => {
+    try {
+      if (role === "admin") await loadAdminData();
+      else if (role === "seller") await loadSellerData();
+      else await loadSharedData();
+    } catch {
+      setDataSource("mock");
+      flash("เชื่อมต่อ Supabase ไม่สำเร็จ ใช้ข้อมูลตัวอย่างชั่วคราว");
+    }
   };
+
+  const visibleRestaurants = restaurants.filter((shop) => `${shop.name} ${shop.description}`.toLowerCase().includes(query.toLowerCase()));
+  const currentMenu = menu.filter(
+    (item) =>
+      item.restaurantId === selectedRestaurant?.id &&
+      item.isAvailable &&
+      !item.isDeleted &&
+      (activeCategory === "ทั้งหมด" || item.category === activeCategory) &&
+      `${item.name} ${item.description}`.toLowerCase().includes(query.toLowerCase()),
+  );
   const cartCount = cart.reduce((sum, item) => sum + item.quantity, 0);
   const foodTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const deliveryFee = cart.length ? selectedRestaurant.delivery : 0;
+  const deliveryFee = cart.length ? selectedRestaurant?.delivery ?? 0 : 0;
+  const customerOrders = orders.filter((order) => (lastOrderId ? order.dbId === lastOrderId : true));
 
-  const addToCart = (item: (typeof initialMenu)[number]) => {
-    if (item.restaurantId !== selectedRestaurant.id && cart.length) setCart([]);
+  const addToCart = (item: MenuItem) => {
+    if (cart.length && cart[0].restaurantId !== item.restaurantId) setCart([]);
     setCart((current) => {
       const found = current.find((x) => x.id === item.id);
-      return found ? current.map((x) => x.id === item.id ? { ...x, quantity: x.quantity + 1 } : x) : [...current, { ...item, quantity: 1, note: "" }];
+      return found ? current.map((x) => (x.id === item.id ? { ...x, quantity: x.quantity + 1 } : x)) : [...current, { ...item, quantity: 1, note: "" }];
     });
     flash(`เพิ่ม “${item.name}” ลงตะกร้าแล้ว`);
   };
 
-  const updateQuantity = (id: string, amount: number) => setCart((current) => current.map((x) => x.id === id ? { ...x, quantity: x.quantity + amount } : x).filter((x) => x.quantity > 0));
-  const updateOrder = (id: string, status: OrderStatus) => {
-    const target = orders.find((o) => o.id === id);
-    setOrders((current) => current.map((o) => o.id === id ? { ...o, status } : o));
-    updateOrderStatus(target?.dbId, status).catch(() => flash("อัปเดตในเครื่องแล้ว แต่บัญชีนี้ยังไม่มีสิทธิ์แก้ไขฐานข้อมูล"));
-    flash(`อัปเดต ${id} เป็น “${status}” แล้ว`);
+  const submitOrder = async () => {
+    if (!selectedRestaurant || !cart.length) return;
+    try {
+      const orderId = await createOrder({
+        restaurantId: selectedRestaurant.id,
+        address: checkoutAddress,
+        note: checkoutNote,
+        items: cart.map((item) => ({ id: item.id, quantity: item.quantity, note: item.note })),
+      });
+      setLastOrderId(orderId);
+      setCart([]);
+      await refreshRoleData();
+      go("tracking");
+      flash("สั่งอาหารสำเร็จ บันทึกลง Supabase แล้ว");
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "สร้างออเดอร์ไม่สำเร็จ");
+    }
   };
 
-  const visibleRestaurants = shopData.filter((r) => `${r.name} ${r.description}`.toLowerCase().includes(query.toLowerCase()));
-  const currentMenu = menu.filter((m) => m.restaurantId === selectedRestaurant.id && (activeCategory === "ทั้งหมด" || m.category === activeCategory) && `${m.name} ${m.description}`.includes(query));
+  const changeOrderStatus = async (order: Order, status: OrderStatusDb) => {
+    try {
+      await updateOrderStatus(order.dbId, status);
+      setOrders((current) => current.map((item) => (item.dbId === order.dbId ? { ...item, status } : item)));
+      await refreshRoleData();
+      flash(`อัปเดต ${order.id} เป็น “${statusText[status]}” แล้ว`);
+    } catch (error) {
+      flash(error instanceof Error ? error.message : "อัปเดตสถานะไม่สำเร็จ");
+    }
+  };
+
+  if (authLoading) {
+    return (
+      <div className="auth-loading">
+        <IconLogo />
+        <span>กำลังตรวจสอบบัญชี...</span>
+      </div>
+    );
+  }
+
+  if (configured && !session) return <AuthScreen />;
+
+  if (configured && session && !profile) {
+    return (
+      <div className="auth-loading auth-profile-error">
+        <IconLogo />
+        <h1>โหลดสิทธิ์ผู้ใช้ไม่สำเร็จ</h1>
+        <p>{profileError || "ไม่พบข้อมูล Profile ของบัญชีนี้"}</p>
+        <div>
+          <button onClick={refreshProfile}>ลองอีกครั้ง</button>
+          <button className="secondary" onClick={signOut}>
+            ออกจากระบบ
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const customerHeader = (
     <header className="topbar customer-topbar">
-      <button className="brand" onClick={() => go("home")}><IconLogo /><span>อิ่มดี</span></button>
-      <div className="location-pill"><MapPin size={17} /><span><small>จัดส่งที่</small><b>บ้าน · สุขุมวิท 49</b></span></div>
+      <button className="brand" onClick={() => go("home")}>
+        <IconLogo />
+        <span>อิ่มดี</span>
+      </button>
+      <div className="location-pill">
+        <MapPin size={17} />
+        <span>
+          <small>จัดส่งที่</small>
+          <b>{checkoutAddress}</b>
+        </span>
+      </div>
       <div className="header-actions">
-        <span className={`data-badge ${dataSource}`}><i />{dataSource === "supabase" ? "Supabase Connected" : dataSource === "loading" ? "กำลังเชื่อมต่อ" : "ข้อมูลตัวอย่าง"}</span>
-        <button className="icon-btn" aria-label="การแจ้งเตือน"><Bell size={21} /><i /></button>
-        <button className="cart-button" onClick={() => go("cart")}><ShoppingCart size={20} /><span>ตะกร้า</span>{cartCount > 0 && <b>{cartCount}</b>}</button>
-        <span className="user-role-chip"><UserRound size={16}/>{profile?.name||"โหมดทดลอง"}<small>{roleLabel(role)}</small></span>
-        <button className="logout-button compact" onClick={()=>signOut()} aria-label="ออกจากระบบ"><LogOut size={18}/></button>
+        <DataBadge source={dataSource} />
+        <button className="icon-btn" aria-label="การแจ้งเตือน">
+          <Bell size={21} />
+          <i />
+        </button>
+        <button className="cart-button" onClick={() => go("cart")}>
+          <ShoppingCart size={20} />
+          <span>ตะกร้า</span>
+          {cartCount > 0 && <b>{cartCount}</b>}
+        </button>
+        <span className="user-role-chip">
+          <UserRound size={16} />
+          {profile?.name || "โหมดทดลอง"}
+          <small>{roleLabel(role)}</small>
+        </span>
+        <button className="logout-button compact" onClick={signOut} aria-label="ออกจากระบบ">
+          <LogOut size={18} />
+        </button>
       </div>
     </header>
   );
 
-  const sellerNav = [
-    ["seller", "ภาพรวม", LayoutDashboard], ["seller-orders", "ออเดอร์", ShoppingBag], ["seller-menu", "เมนูอาหาร", CookingPot],
-    ["seller-report", "รายงานยอดขาย", BarChart3], ["seller-shop", "ข้อมูลร้าน", Store],
-  ] as const;
-  const adminNav = [
-    ["admin", "ภาพรวมระบบ", LayoutDashboard], ["admin-shops", "ร้านค้า", Store], ["admin-users", "ผู้ใช้งาน", Users],
-    ["admin-orders", "ออเดอร์ทั้งหมด", ShoppingBag], ["admin-gp", "ตั้งค่า GP", CircleDollarSign], ["admin-report", "รายงานระบบ", BarChart3],
-  ] as const;
-
-  const sidebar = role !== "customer" ? (
-    <aside className="sidebar">
-      <button className="brand brand-light" onClick={() => go(role === "seller" ? "seller" : "admin")}><IconLogo /><span>อิ่มดี</span></button>
-      <div className="workspace-label">{role === "seller" ? "ศูนย์จัดการร้านค้า" : "ผู้ดูแลระบบ"}</div>
-      <nav>{(role === "seller" ? sellerNav : adminNav).map(([id, label, Icon]) => <button key={id} className={screen === id ? "active" : ""} onClick={() => go(id)}><Icon size={20} /><span>{label}</span>{id === "seller-orders" && <em>3</em>}</button>)}</nav>
-      <div className="sidebar-bottom"><div className="user-card"><div className="avatar">{profile?.name?.[0]||"อ"}</div><span><b>{profile?.name||"ผู้ใช้งาน"}</b><small>{roleLabel(role)}</small></span><button className="logout-button" onClick={()=>signOut()} aria-label="ออกจากระบบ"><LogOut size={18}/></button></div></div>
-    </aside>
-  ) : null;
-
-  const mobileNav = role === "customer" ? (
-    <nav className="mobile-nav">
-      <button className={screen === "home" || screen === "restaurant" ? "active" : ""} onClick={() => go("home")}><Home size={21} /><span>หน้าหลัก</span></button>
-      <button><Search size={21} /><span>ค้นหา</span></button>
-      <button className={screen === "tracking" ? "active" : ""} onClick={() => go("tracking")}><ShoppingBag size={21} /><span>ออเดอร์</span></button>
-      <button onClick={() => switchRole("seller")}><Store size={21} /><span>ร้านค้า</span></button>
-    </nav>
-  ) : null;
-
-  if(authLoading) return <div className="auth-loading"><IconLogo/><span>กำลังตรวจสอบบัญชี...</span></div>;
-  if(configured&&!session) return <AuthScreen/>;
-  if(configured&&session&&!profile) return <div className="auth-loading auth-profile-error"><IconLogo/><h1>โหลดสิทธิ์ผู้ใช้ไม่สำเร็จ</h1><p>{profileError||"ไม่พบข้อมูล Profile ของบัญชีนี้"}</p><div><button onClick={refreshProfile}>ลองอีกครั้ง</button><button className="secondary" onClick={signOut}>ออกจากระบบ</button></div></div>;
-
   return (
     <div className={role === "customer" ? "app customer-app" : "app dashboard-app"}>
-      {role === "customer" ? customerHeader : sidebar}
+      {role === "customer" ? customerHeader : <DashboardSidebar role={role} screen={screen} go={go} signOut={signOut} profileName={profile?.name ?? ""} />}
       <main className={role === "customer" ? "main" : "dashboard-main"}>
-        {screen === "home" && <CustomerHome restaurants={visibleRestaurants} query={query} setQuery={setQuery} activeCategory={activeCategory} setActiveCategory={setActiveCategory} openRestaurant={(r) => { setSelectedRestaurant(r); setQuery(""); setActiveCategory("ทั้งหมด"); go("restaurant"); }} />}
-        {screen === "restaurant" && <RestaurantPage restaurant={selectedRestaurant} menu={currentMenu} activeCategory={activeCategory} setActiveCategory={setActiveCategory} query={query} setQuery={setQuery} addToCart={addToCart} back={() => go("home")} cartCount={cartCount} openCart={() => go("cart")} />}
-        {screen === "cart" && <CartPage items={cart} foodTotal={foodTotal} deliveryFee={deliveryFee} updateQuantity={updateQuantity} updateNote={(id, note) => setCart((c) => c.map((x) => x.id === id ? { ...x, note } : x))} back={() => go("restaurant")} checkout={async () => { try { await createOrder({ restaurantId:selectedRestaurant.id,customerName:"ลูกค้าอิ่มดี",address:"บ้าน · สุขุมวิท 49",note:cart.map(i=>i.note).filter(Boolean).join("; "),deliveryFee,items:cart }); setDataSource("supabase"); } catch { flash("ไม่สามารถบันทึกออเดอร์ได้ กรุณาตรวจสอบการเชื่อมต่อ"); return; } setCart([]); go("tracking"); flash("สั่งอาหารสำเร็จ บันทึกลง Supabase แล้ว"); }} />}
-        {screen === "tracking" && <TrackingPage back={() => go("home")} />}
+        {role === "customer" && screen === "home" && (
+          <CustomerHome
+            restaurants={visibleRestaurants}
+            categories={categories}
+            query={query}
+            setQuery={setQuery}
+            activeCategory={activeCategory}
+            setActiveCategory={setActiveCategory}
+            openRestaurant={(shop) => {
+              setSelectedRestaurant(shop);
+              setQuery("");
+              setActiveCategory("ทั้งหมด");
+              go("restaurant");
+            }}
+          />
+        )}
+        {role === "customer" && screen === "restaurant" && selectedRestaurant && (
+          <RestaurantPage
+            restaurant={selectedRestaurant}
+            categories={categories}
+            menu={currentMenu}
+            activeCategory={activeCategory}
+            setActiveCategory={setActiveCategory}
+            query={query}
+            setQuery={setQuery}
+            addToCart={addToCart}
+            back={() => go("home")}
+            cartCount={cartCount}
+            openCart={() => go("cart")}
+          />
+        )}
+        {role === "customer" && screen === "cart" && (
+          <CartPage
+            items={cart}
+            foodTotal={foodTotal}
+            deliveryFee={deliveryFee}
+            address={checkoutAddress}
+            setAddress={setCheckoutAddress}
+            orderNote={checkoutNote}
+            setOrderNote={setCheckoutNote}
+            updateQuantity={(id, amount) => setCart((current) => current.map((item) => (item.id === id ? { ...item, quantity: item.quantity + amount } : item)).filter((item) => item.quantity > 0))}
+            updateNote={(id, note) => setCart((current) => current.map((item) => (item.id === id ? { ...item, note } : item)))}
+            back={() => go(selectedRestaurant ? "restaurant" : "home")}
+            checkout={submitOrder}
+          />
+        )}
+        {role === "customer" && screen === "tracking" && <TrackingPage orders={customerOrders} back={() => go("home")} />}
 
-        {screen === "seller" && <SellerDashboard go={go} orders={orders} updateOrder={updateOrder} />}
-        {screen === "seller-orders" && <SellerOrders orders={orders} updateOrder={updateOrder} />}
-        {screen === "seller-menu" && <SellerMenu menu={menu.filter((m) => m.restaurantId === shopData[0]?.id)} toggle={(id) => { const item=menu.find(x=>x.id===id); setMenu((m) => m.map((x) => x.id === id ? { ...x, isAvailable: !x.isAvailable } : x)); if(item) setMenuAvailability(id,!item.isAvailable).catch(()=>flash("ต้องเข้าสู่ระบบผู้ขายก่อนแก้ไขเมนูจริง")); }} showForm={showMenuForm} setShowForm={setShowMenuForm} addMenu={async (name, price) => { try { const saved=await createMenu({restaurantId:shopData[0].id,name,price}); if(saved) setMenu((m) => [...m, { id:saved.id,restaurantId:saved.restaurant_id,name:saved.name,price:Number(saved.price),description:saved.description,category:"ข้าว",image:saved.image_url || "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80",isAvailable:true,popular:false }]); setShowMenuForm(false); flash("เพิ่มเมนูลง Supabase แล้ว"); } catch { flash("ต้องเข้าสู่ระบบผู้ขายก่อนเพิ่มเมนู"); } }} />}
-        {screen === "seller-report" && <SellerReport />}
-        {screen === "seller-shop" && <ShopSettings flash={flash} />}
+        {role === "seller" && screen === "seller" && <SellerDashboard restaurant={sellerRestaurant} orders={orders} summary={sellerSummary} go={go} updateOrder={changeOrderStatus} />}
+        {role === "seller" && screen === "seller-menu" && (
+          <SellerMenu restaurant={sellerRestaurant} menu={menu.filter((item) => item.restaurantId === sellerRestaurant?.id && !item.isDeleted)} categories={categories} refresh={refreshRoleData} flash={flash} />
+        )}
+        {role === "seller" && screen === "seller-orders" && <OrdersBoard orders={orders} updateOrder={changeOrderStatus} />}
+        {role === "seller" && screen === "seller-report" && <SellerReport summary={sellerSummary} orders={orders} />}
+        {role === "seller" && screen === "seller-shop" && <ShopSettings restaurant={sellerRestaurant} refresh={refreshRoleData} flash={flash} />}
 
-        {screen === "admin" && <AdminDashboard go={go} />}
-        {screen === "admin-shops" && <AdminShops gp={gp} setGp={setGp} flash={flash} />}
-        {screen === "admin-users" && <AdminUsers />}
-        {screen === "admin-orders" && <SellerOrders orders={orders} updateOrder={updateOrder} admin />}
-        {screen === "admin-gp" && <GpSettings gp={gp} setGp={setGp} flash={flash} />}
-        {screen === "admin-report" && <AdminReport />}
+        {role === "admin" && screen === "admin" && <AdminDashboard summary={adminSummary} shops={adminRestaurants} orders={orders} go={go} />}
+        {role === "admin" && screen === "admin-shops" && <AdminShops shops={adminRestaurants} refresh={refreshRoleData} flash={flash} />}
+        {role === "admin" && screen === "admin-users" && <AdminUsers users={users} />}
+        {role === "admin" && screen === "admin-orders" && <OrdersBoard orders={orders} updateOrder={changeOrderStatus} admin />}
+        {role === "admin" && screen === "admin-gp" && <GpSettings shops={adminRestaurants} refresh={refreshRoleData} flash={flash} />}
+        {role === "admin" && screen === "admin-report" && <AdminReport summary={adminSummary} />}
       </main>
-      {mobileNav}
-      {toast && <div className="toast"><Check size={18} />{toast}</div>}
+      {role === "customer" && (
+        <nav className="mobile-nav">
+          <button className={screen === "home" || screen === "restaurant" ? "active" : ""} onClick={() => go("home")}>
+            <Home size={21} />
+            <span>หน้าหลัก</span>
+          </button>
+          <button onClick={() => setQuery("")}>
+            <Search size={21} />
+            <span>ค้นหา</span>
+          </button>
+          <button className={screen === "tracking" ? "active" : ""} onClick={() => go("tracking")}>
+            <ShoppingBag size={21} />
+            <span>ออเดอร์</span>
+          </button>
+          <button className={screen === "cart" ? "active" : ""} onClick={() => go("cart")}>
+            <ShoppingCart size={21} />
+            <span>ตะกร้า</span>
+          </button>
+        </nav>
+      )}
+      {toast && (
+        <div className="toast">
+          <Check size={18} />
+          {toast}
+        </div>
+      )}
     </div>
   );
 }
 
-const roleLabel=(role:Role)=>role==="customer"?"ลูกค้า":role==="seller"?"ผู้ขาย":"ผู้ดูแลระบบ";
-
-function RolePicker({ role, onChange, dark = false }: { role: Role; onChange: (r: Role) => void; dark?: boolean }) {
-  return <select className={`role-picker ${dark ? "dark" : ""}`} aria-label="เปลี่ยนบทบาท" value={role} onChange={(e) => onChange(e.target.value as Role)}><option value="customer">ลูกค้า</option><option value="seller">ผู้ขาย</option><option value="admin">Admin</option></select>;
+function DataBadge({ source }: { source: "loading" | "supabase" | "mock" }) {
+  return (
+    <span className={`data-badge ${source}`}>
+      <i />
+      {source === "supabase" ? "Supabase Connected" : source === "loading" ? "กำลังเชื่อมต่อ" : "ข้อมูลตัวอย่าง"}
+    </span>
+  );
 }
 
-function CustomerHome({ restaurants: shops, query, setQuery, activeCategory, setActiveCategory, openRestaurant }: any) {
-  return <>
-    <section className="hero">
-      <div><span className="eyebrow">ส่งฟรีเมื่อสั่งครบ ฿199</span><h1>มื้อนี้กินอะไรดี?</h1><p>อร่อยกับร้านเด็ดใกล้บ้าน ส่งถึงมือคุณ</p><SearchBox value={query} onChange={setQuery} placeholder="ค้นหาร้าน หรือเมนูที่อยากกิน" /></div>
-      <div className="hero-art" aria-hidden="true"><div className="plate">🍜</div><span className="leaf leaf-a">🌿</span><span className="leaf leaf-b">🌶️</span></div>
+function DashboardSidebar({ role, screen, go, signOut, profileName }: { role: Role; screen: Screen; go: (screen: Screen) => void; signOut: () => void; profileName: string }) {
+  const nav =
+    role === "seller"
+      ? ([
+          ["seller", "ภาพรวม", LayoutDashboard],
+          ["seller-orders", "ออเดอร์", ShoppingBag],
+          ["seller-menu", "เมนูอาหาร", CookingPot],
+          ["seller-report", "รายงานยอดขาย", BarChart3],
+          ["seller-shop", "ข้อมูลร้าน", Store],
+        ] as const)
+      : ([
+          ["admin", "ภาพรวมระบบ", LayoutDashboard],
+          ["admin-shops", "ร้านค้า", Store],
+          ["admin-users", "ผู้ใช้", Users],
+          ["admin-orders", "ออเดอร์ทั้งหมด", ShoppingBag],
+          ["admin-gp", "ตั้งค่า GP", CircleDollarSign],
+          ["admin-report", "รายงานระบบ", BarChart3],
+        ] as const);
+
+  return (
+    <aside className="sidebar">
+      <button className="brand brand-light" onClick={() => go(role === "seller" ? "seller" : "admin")}>
+        <IconLogo />
+        <span>อิ่มดี</span>
+      </button>
+      <div className="workspace-label">{role === "seller" ? "ศูนย์จัดการร้านค้า" : "ผู้ดูแลระบบ"}</div>
+      <nav>
+        {nav.map(([id, label, Icon]) => (
+          <button key={id} className={screen === id ? "active" : ""} onClick={() => go(id)}>
+            <Icon size={20} />
+            <span>{label}</span>
+          </button>
+        ))}
+      </nav>
+      <div className="sidebar-bottom">
+        <div className="user-card">
+          <div className="avatar">{profileName?.[0] || "อ"}</div>
+          <span>
+            <b>{profileName || "ผู้ใช้งาน"}</b>
+            <small>{roleLabel(role)}</small>
+          </span>
+          <button className="logout-button" onClick={signOut} aria-label="ออกจากระบบ">
+            <LogOut size={18} />
+          </button>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function SearchBox({ value, onChange, placeholder }: { value: string; onChange: (value: string) => void; placeholder: string }) {
+  return (
+    <label className="search-box">
+      <Search size={19} />
+      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} />
+    </label>
+  );
+}
+
+function CustomerHome({ restaurants, categories, query, setQuery, activeCategory, setActiveCategory, openRestaurant }: any) {
+  return (
+    <>
+      <section className="hero">
+        <div>
+          <span className="eyebrow">ส่งฟรีเมื่อสั่งครบ ฿199</span>
+          <h1>มื้อนี้กินอะไรดี?</h1>
+          <p>อร่อยกับร้านเด็ดใกล้บ้าน สั่งถึงมือคุณ</p>
+          <SearchBox value={query} onChange={setQuery} placeholder="ค้นหาร้าน หรือเมนูที่อยากกิน" />
+        </div>
+        <div className="hero-art" aria-hidden="true">
+          <div className="plate">🍜</div>
+          <span className="leaf leaf-a">🌿</span>
+          <span className="leaf leaf-b">🌶️</span>
+        </div>
+      </section>
+      <section className="section">
+        <div className="section-head">
+          <div>
+            <span className="kicker">เลือกตามใจ</span>
+            <h2>หมวดหมู่ยอดนิยม</h2>
+          </div>
+        </div>
+        <div className="category-row">
+          {categories.map((cat: Category, index: number) => (
+            <button key={cat.id} className={activeCategory === cat.name ? "active" : ""} onClick={() => setActiveCategory(activeCategory === cat.name ? "ทั้งหมด" : cat.name)}>
+              <span>{cat.icon || ["🍚", "🍜", "🧋", "🍧", "🍗"][index % 5]}</span>
+              <b>{cat.name}</b>
+            </button>
+          ))}
+        </div>
+      </section>
+      <section className="section">
+        <div className="section-head">
+          <div>
+            <span className="kicker">ร้านอร่อยใกล้คุณ</span>
+            <h2>ร้านที่เปิดขายตอนนี้</h2>
+          </div>
+          <button className="text-button">
+            ดูทั้งหมด <ChevronRight size={18} />
+          </button>
+        </div>
+        <div className="restaurant-grid">
+          {restaurants.map((shop: Restaurant) => (
+            <article className="restaurant-card" key={shop.id} onClick={() => openRestaurant(shop)}>
+              <div className="card-image">
+                <img src={shop.image} alt={shop.name} />
+                <span className="open">เปิดอยู่</span>
+              </div>
+              <div className="card-content">
+                <h3>{shop.name}</h3>
+                <p>{shop.description}</p>
+                <div className="meta">
+                  <span>
+                    <Star size={16} fill="currentColor" /> {shop.rating || "ใหม่"}
+                  </span>
+                  <span>
+                    <Clock3 size={16} /> {shop.time}
+                  </span>
+                  <span>
+                    <Truck size={16} /> {money(shop.delivery)}
+                  </span>
+                </div>
+              </div>
+            </article>
+          ))}
+        </div>
+        {!restaurants.length && <EmptyState title="ยังไม่มีร้านที่อนุมัติ" text="ร้าน pending หรือ suspended จะไม่แสดงให้ลูกค้าสั่งอาหาร" />}
+      </section>
+    </>
+  );
+}
+
+function RestaurantPage({ restaurant, categories, menu, activeCategory, setActiveCategory, query, setQuery, addToCart, back, cartCount, openCart }: any) {
+  return (
+    <section className="restaurant-page">
+      <button className="back-button" onClick={back}>
+        <ArrowLeft size={18} /> กลับหน้าร้านทั้งหมด
+      </button>
+      <div className="restaurant-hero">
+        <img src={restaurant.image} alt={restaurant.name} />
+        <div className="restaurant-overlay">
+          <span className="open-dot">● เปิดขาย</span>
+          <h1>{restaurant.name}</h1>
+          <p>{restaurant.description}</p>
+          <div className="meta">
+            <span>
+              <Star size={16} fill="currentColor" /> {restaurant.rating || "ใหม่"}
+            </span>
+            <span>
+              <Clock3 size={16} /> {restaurant.time}
+            </span>
+            <span>
+              <Truck size={16} /> ค่าส่ง {money(restaurant.delivery)}
+            </span>
+          </div>
+        </div>
+      </div>
+      <div className="menu-toolbar">
+        <div className="pills">
+          <button className={activeCategory === "ทั้งหมด" ? "active" : ""} onClick={() => setActiveCategory("ทั้งหมด")}>
+            ทั้งหมด
+          </button>
+          {categories.map((cat: Category) => (
+            <button key={cat.id} className={activeCategory === cat.name ? "active" : ""} onClick={() => setActiveCategory(cat.name)}>
+              {cat.name}
+            </button>
+          ))}
+        </div>
+        <SearchBox value={query} onChange={setQuery} placeholder="ค้นหาเมนู" />
+      </div>
+      <div className="menu-grid">
+        {menu.map((item: MenuItem) => (
+          <article className="menu-card" key={item.id}>
+            <img src={item.image} alt={item.name} />
+            <div>
+              <header>
+                {item.popular && <span className="popular">ขายดี</span>}
+                <h3>{item.name}</h3>
+                <p>{item.description}</p>
+              </header>
+              <footer>
+                <b>{money(item.price)}</b>
+                <button onClick={() => addToCart(item)} aria-label={`เพิ่ม ${item.name}`}>
+                  <Plus size={20} />
+                </button>
+              </footer>
+            </div>
+          </article>
+        ))}
+      </div>
+      {!menu.length && <EmptyState title="ยังไม่มีเมนูที่เปิดขาย" text="แสดงเฉพาะเมนู available และไม่ถูกลบเท่านั้น" />}
+      {cartCount > 0 && (
+        <button className="floating-cart" onClick={openCart}>
+          <span>
+            <ShoppingCart /> {cartCount} รายการ
+          </span>
+          <strong>ดูตะกร้า</strong>
+        </button>
+      )}
     </section>
-    <section className="section"><div className="section-head"><div><span className="kicker">เลือกตามใจ</span><h2>หมวดหมู่ยอดนิยม</h2></div></div><div className="category-row">{categories.slice(1).map((cat, i) => <button key={cat} className={activeCategory === cat ? "active" : ""} onClick={() => setActiveCategory(activeCategory === cat ? "ทั้งหมด" : cat)}><span>{["🍚", "🍜", "🧋", "🍧", "🍗"][i]}</span><b>{cat}</b></button>)}</div></section>
-    <section className="section"><div className="section-head"><div><span className="kicker">ร้านอร่อยใกล้คุณ</span><h2>ร้านแนะนำ</h2></div><button className="text-button">ดูทั้งหมด <ChevronRight size={18} /></button></div><div className="restaurant-grid">{shops.map((r: any) => <article className="restaurant-card" key={r.id} onClick={() => openRestaurant(r)}><div className="card-image"><img src={r.image} alt={r.name} /><span className={r.isOpen ? "open" : "closed"}>{r.isOpen ? "เปิดอยู่" : "ปิดแล้ว"}</span>{r.id === "r1" && <b className="deal">ลด 15%</b>}</div><div className="card-content"><h3>{r.name}</h3><p>{r.description}</p><div className="meta"><span><Star size={16} fill="currentColor" /> {r.rating}</span><span><Clock3 size={16} /> {r.time}</span><span><Truck size={16} /> ฿{r.delivery}</span></div></div></article>)}</div></section>
-    <section className="promo"><div><span>สิทธิพิเศษวันนี้</span><h2>อิ่มคุ้มทุกมื้อ</h2><p>รับส่วนลด ฿50 สำหรับออเดอร์แรกของคุณ</p></div><button>เก็บคูปอง</button></section>
-  </>;
+  );
 }
 
-function SearchBox({ value, onChange, placeholder }: any) { return <label className="search-box"><Search size={21} /><input aria-label="ค้นหา" value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} /></label>; }
+function CartPage({ items, foodTotal, deliveryFee, address, setAddress, orderNote, setOrderNote, updateQuantity, updateNote, back, checkout }: any) {
+  if (!items.length) {
+    return (
+      <section className="narrow-page">
+        <button className="back-button" onClick={back}>
+          <ArrowLeft size={18} /> กลับไปเลือกอาหาร
+        </button>
+        <EmptyState title="ตะกร้ายังว่าง" text="เลือกเมนูจากร้านที่อนุมัติแล้วเพื่อเริ่มสั่งอาหาร" />
+      </section>
+    );
+  }
 
-function RestaurantPage({ restaurant, menu, activeCategory, setActiveCategory, query, setQuery, addToCart, back, cartCount, openCart }: any) {
-  return <div className="restaurant-page"><button className="back-button" onClick={back}><ArrowLeft size={19} /> กลับไปหน้าร้านทั้งหมด</button><section className="restaurant-hero"><img src={restaurant.image} alt={restaurant.name} /><div className="restaurant-overlay"><span className="open-dot">● เปิดอยู่</span><h1>{restaurant.name}</h1><p>{restaurant.description}</p><div className="meta"><span><Star size={17} fill="currentColor" /> {restaurant.rating} (380+ รีวิว)</span><span><Clock3 size={17} /> {restaurant.time}</span><span><Truck size={17} /> ค่าส่ง ฿{restaurant.delivery}</span></div></div></section><div className="menu-toolbar"><div className="pills">{categories.map((cat) => <button key={cat} className={activeCategory === cat ? "active" : ""} onClick={() => setActiveCategory(cat)}>{cat}</button>)}</div><SearchBox value={query} onChange={setQuery} placeholder="ค้นหาเมนู" /></div><div className="section-head"><div><span className="kicker">เลือกเมนู</span><h2>{activeCategory === "ทั้งหมด" ? "เมนูทั้งหมด" : activeCategory}</h2></div></div><div className="menu-grid">{menu.map((item: any) => <article className="menu-card" key={item.id}><img src={item.image} alt={item.name} /><div><div>{item.popular && <span className="popular">ขายดี</span>}<h3>{item.name}</h3><p>{item.description}</p></div><footer><b>{money(item.price)}</b><button onClick={() => addToCart(item)} aria-label={`เพิ่ม ${item.name}`}><Plus size={20} /></button></footer></div></article>)}</div>{cartCount > 0 && <button className="floating-cart" onClick={openCart}><span><ShoppingCart size={20} /><b>{cartCount} รายการ</b></span><strong>ดูตะกร้า <ChevronRight size={18} /></strong></button>}</div>;
+  return (
+    <section className="narrow-page">
+      <button className="back-button" onClick={back}>
+        <ArrowLeft size={18} /> กลับไปเลือกอาหาร
+      </button>
+      <div className="page-title">
+        <div>
+          <span className="kicker">ตรวจสอบรายการ</span>
+          <h1>ตะกร้าสินค้า</h1>
+        </div>
+      </div>
+      <div className="checkout-layout">
+        <div className="cart-list">
+          <div className="order-shop">
+            <Store size={18} />
+            <b>รายการอาหาร</b>
+            <span>{items.length} เมนู</span>
+          </div>
+          {items.map((item: CartItem) => (
+            <article className="cart-item" key={item.id}>
+              <img src={item.image} alt={item.name} />
+              <div className="cart-info">
+                <h3>{item.name}</h3>
+                <b>{money(item.price)}</b>
+                <input value={item.note} onChange={(event) => updateNote(item.id, event.target.value)} placeholder="หมายเหตุรายเมนู เช่น ไม่เผ็ด ไม่ใส่ผัก" />
+              </div>
+              <div className="stepper">
+                <button onClick={() => updateQuantity(item.id, -1)}>
+                  <Minus size={16} />
+                </button>
+                <b>{item.quantity}</b>
+                <button onClick={() => updateQuantity(item.id, 1)}>
+                  <Plus size={16} />
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+        <aside className="summary-card">
+          <h2>สรุปคำสั่งซื้อ</h2>
+          <label className="form-field">
+            ที่อยู่จัดส่ง
+            <textarea value={address} onChange={(event) => setAddress(event.target.value)} />
+          </label>
+          <label className="form-field">
+            หมายเหตุรวมของออเดอร์
+            <textarea value={orderNote} onChange={(event) => setOrderNote(event.target.value)} placeholder="เช่น โทรก่อนถึงบ้าน" />
+          </label>
+          <div className="summary-lines">
+            <span>
+              ยอดอาหาร <b>{money(foodTotal)}</b>
+            </span>
+            <span>
+              ค่าจัดส่ง <b>{money(deliveryFee)}</b>
+            </span>
+          </div>
+          <div className="grand-total">
+            <span>
+              รวมทั้งหมด
+              <small>GP คำนวณฝั่งฐานข้อมูลจากยอดอาหาร</small>
+            </span>
+            <b>{money(foodTotal + deliveryFee)}</b>
+          </div>
+          <button className="primary-button" onClick={checkout}>
+            ยืนยันคำสั่งซื้อ
+          </button>
+        </aside>
+      </div>
+    </section>
+  );
 }
 
-function CartPage({ items, foodTotal, deliveryFee, updateQuantity, updateNote, back, checkout }: any) {
-  return <div className="narrow-page"><button className="back-button" onClick={back}><ArrowLeft size={19} /> เลือกเมนูเพิ่ม</button><div className="page-title"><div><span className="kicker">ตรวจสอบก่อนสั่ง</span><h1>ตะกร้าของฉัน</h1></div><span>{items.length} เมนู</span></div>{items.length === 0 ? <EmptyCart back={back} /> : <div className="checkout-layout"><section className="cart-list"><div className="order-shop"><Store size={20} /><b>ครัวแม่อร</b><span>รับอาหารใน 20-30 นาที</span></div>{items.map((item: any) => <article className="cart-item" key={item.id}><img src={item.image} alt="" /><div className="cart-info"><h3>{item.name}</h3><b>{money(item.price)}</b><input aria-label={`หมายเหตุ ${item.name}`} value={item.note} onChange={(e) => updateNote(item.id, e.target.value)} placeholder="เพิ่มหมายเหตุ เช่น ไม่เผ็ด ไม่ใส่ผัก" /></div><div className="stepper"><button onClick={() => updateQuantity(item.id, -1)}><Minus size={16} /></button><b>{item.quantity}</b><button onClick={() => updateQuantity(item.id, 1)}><Plus size={16} /></button></div></article>)}</section><aside className="summary-card"><h2>สรุปคำสั่งซื้อ</h2><label className="address-card"><MapPin size={21} /><span><small>จัดส่งที่</small><b>บ้าน · สุขุมวิท 49</b><em>แก้ไข</em></span></label><div className="summary-lines"><span>ค่าอาหาร <b>{money(foodTotal)}</b></span><span>ค่าจัดส่ง <b>{money(deliveryFee)}</b></span><span className="discount">ส่วนลด <b>-฿20</b></span></div><div className="grand-total"><span>ยอดชำระทั้งหมด<small>รวมภาษีแล้ว</small></span><b>{money(foodTotal + deliveryFee - 20)}</b></div><button className="primary-button" onClick={checkout}>ยืนยันคำสั่งซื้อ <ChevronRight size={20} /></button><p className="tiny-note">ค่า GP {selectedRestaurantGp()}% คำนวณจากยอดอาหารและหักจากรายรับร้านค้า ไม่เพิ่มในยอดชำระของคุณ</p></aside></div>}</div>;
-}
-const selectedRestaurantGp = () => 15;
-function EmptyCart({ back }: any) { return <div className="empty-state"><div>🛒</div><h2>ตะกร้ายังว่างอยู่</h2><p>เลือกเมนูอร่อย ๆ แล้วกลับมาที่นี่นะ</p><button className="primary-button" onClick={back}>เลือกเมนูอาหาร</button></div>; }
-
-function TrackingPage({ back }: any) {
-  const steps = [["ร้านรับออเดอร์แล้ว", "10:43", Check], ["กำลังทำอาหาร", "โดยประมาณ 15 นาที", CookingPot], ["พร้อมส่ง", "", PackageCheck], ["กำลังจัดส่ง", "", Truck]] as const;
-  return <div className="narrow-page tracking"><button className="back-button" onClick={back}><ArrowLeft size={19} /> กลับหน้าหลัก</button><div className="tracking-head"><span className="live-dot">● อัปเดตล่าสุด</span><h1>ร้านกำลังทำอาหารของคุณ</h1><p>คาดว่าจะได้รับประมาณ 11:10 น.</p><div className="time-badge">อีกประมาณ <b>22 นาที</b></div></div><section className="tracking-card"><div className="track-steps">{steps.map(([label, time, Icon], i) => <div className={i < 2 ? "done" : ""} key={label}><span><Icon size={19} /></span><p><b>{label}</b><small>{time}</small></p></div>)}</div><div className="driver-card"><div className="avatar">ส</div><span><small>ผู้จัดส่งของคุณ</small><b>คุณสมชาย · Honda Wave</b><em>กข 1234 กรุงเทพฯ</em></span><button>โทร</button></div></section><section className="order-mini"><div><span>ออเดอร์ #OD-1049</span><b>ครัวแม่อร</b></div><span>3 รายการ <b>฿190</b></span></section></div>;
-}
-
-function DashboardTop({ title, subtitle }: { title: string; subtitle: string }) { return <div className="dashboard-top"><div><p>{subtitle}</p><h1>{title}</h1></div><div><button className="icon-btn"><Bell size={21} /><i /></button><span className="date-pill"><Clock3 size={17} /> วันนี้ 13 ก.ค. 2569</span></div></div>; }
-function StatCard({ label, value, change, icon: Icon, tone = "orange" }: any) { return <article className={`stat-card ${tone}`}><div className="stat-icon"><Icon size={22} /></div><p>{label}</p><h2>{value}</h2><span>{change}</span></article>; }
-
-function SellerDashboard({ go, orders, updateOrder }: any) {
-  const newOrder = orders.find((o: any) => o.status === "รอรับออเดอร์");
-  return <><DashboardTop title="สวัสดี คุณอรทัย 👋" subtitle="ภาพรวมร้านครัวแม่อร" /><div className="shop-status"><div><span className="pulse" /><p><b>ร้านเปิดอยู่</b><small>เปิดรับออเดอร์ตามปกติ · ปิด 20:30 น.</small></p></div><button><ToggleRight size={30} /> เปิดรับออเดอร์</button></div><div className="stats-grid seller-stats"><StatCard label="ยอดขายวันนี้" value="฿8,450" change="↑ 12.5% จากเมื่อวาน" icon={WalletCards} /><StatCard label="ออเดอร์วันนี้" value="42" change="3 ออเดอร์ใหม่" icon={ShoppingBag} tone="blue" /><StatCard label="ค่า GP (15%)" value="฿1,267.50" change="จากยอดอาหารทั้งหมด" icon={CircleDollarSign} tone="purple" /><StatCard label="รายได้สุทธิ" value="฿7,182.50" change="หลังหักค่า GP" icon={BarChart3} tone="green" /></div>{newOrder && <section className="urgent-order"><div className="urgent-head"><span><i /> ออเดอร์ใหม่</span><b>เข้ามาเมื่อ 1 นาทีที่แล้ว</b></div><div className="urgent-body"><div className="order-number"><small>หมายเลขออเดอร์</small><h2>#{newOrder.id}</h2><span><Clock3 size={17} /> รับอาหาร 11:10 น.</span></div><div className="order-detail"><h3>{newOrder.customer}</h3><p>{newOrder.items}</p><span>หมายเหตุ: {newOrder.note}</span></div><div className="order-total"><small>ยอดรวม</small><h2>{money(newOrder.total)}</h2></div></div><div className="order-actions"><button className="reject" onClick={() => updateOrder(newOrder.id, "ยกเลิก")}><X size={19} /> ปฏิเสธ</button><button className="accept" onClick={() => updateOrder(newOrder.id, "กำลังทำอาหาร")}><Check size={20} /> รับออเดอร์</button></div></section>}<div className="dashboard-grid"><section className="panel"><div className="panel-head"><div><h2>ออเดอร์ล่าสุด</h2><p>ติดตามและจัดการออเดอร์วันนี้</p></div><button className="text-button" onClick={() => go("seller-orders")}>ดูทั้งหมด <ChevronRight size={18} /></button></div><OrderTable orders={orders.slice(0, 3)} /></section><section className="panel quick-panel"><div className="panel-head"><div><h2>จัดการด่วน</h2><p>เมนูที่ใช้บ่อย</p></div></div><button onClick={() => go("seller-menu")}><span><CookingPot size={22} /></span><p><b>จัดการเมนู</b><small>เพิ่ม แก้ไข เปิด-ปิดเมนู</small></p><ChevronRight /></button><button onClick={() => go("seller-report")}><span><BarChart3 size={22} /></span><p><b>ดูรายงานยอดขาย</b><small>ยอดขาย GP และรายได้สุทธิ</small></p><ChevronRight /></button><button onClick={() => go("seller-shop")}><span><Settings size={22} /></span><p><b>ตั้งค่าร้านค้า</b><small>เวลาเปิด-ปิด และข้อมูลร้าน</small></p><ChevronRight /></button></section></div></>;
-}
-
-function OrderTable({ orders }: any) { return <div className="table-wrap"><table><thead><tr><th>ออเดอร์</th><th>ลูกค้า</th><th>รายการ</th><th>ยอดรวม</th><th>สถานะ</th></tr></thead><tbody>{orders.map((o: any) => <tr key={o.id}><td><b>#{o.id}</b><small>{o.time} น.</small></td><td>{o.customer}</td><td className="truncate-cell">{o.items}</td><td><b>{money(o.total)}</b></td><td><Status status={o.status} /></td></tr>)}</tbody></table></div>; }
-function Status({ status }: { status: string }) { const key = status === "รอรับออเดอร์" ? "wait" : status === "กำลังทำอาหาร" ? "cook" : status === "พร้อมส่ง" ? "ready" : status === "สำเร็จ" ? "success" : status === "ยกเลิก" ? "cancel" : "delivery"; return <span className={`status ${key}`}>{status}</span>; }
-
-function SellerOrders({ orders, updateOrder, admin = false }: any) { return <><DashboardTop title={admin ? "ออเดอร์ทั้งหมด" : "จัดการออเดอร์"} subtitle={admin ? "ติดตามคำสั่งซื้อทั้งระบบ" : "วันนี้มี 3 ออเดอร์ที่ต้องดูแล"} /><div className="filter-tabs"><button className="active">ทั้งหมด <b>{orders.length}</b></button><button>ออเดอร์ใหม่ <b>1</b></button><button>กำลังทำ <b>1</b></button><button>พร้อมส่ง <b>1</b></button></div><div className="order-board">{orders.map((o: any) => <article className="order-card-large" key={o.id}><header><div><Status status={o.status} /><h2>#{o.id}</h2><span>{o.time} น.</span></div><b>{money(o.total)}</b></header><div className="order-customer"><UserRound size={19} /><span><b>{o.customer}</b><small>{admin ? o.restaurant : "ลูกค้าประจำ · 8 ออเดอร์"}</small></span></div><div className="order-items"><p>{o.items}</p><span>หมายเหตุ: {o.note}</span></div><footer>{o.status === "รอรับออเดอร์" && <><button className="reject" onClick={() => updateOrder(o.id, "ยกเลิก")}>ปฏิเสธ</button><button className="accept" onClick={() => updateOrder(o.id, "กำลังทำอาหาร")}>รับออเดอร์</button></>}{o.status === "กำลังทำอาหาร" && <button className="accept full" onClick={() => updateOrder(o.id, "พร้อมส่ง")}>อาหารพร้อมแล้ว</button>}{o.status === "พร้อมส่ง" && <button className="accept full" onClick={() => updateOrder(o.id, "กำลังจัดส่ง")}>ส่งให้ไรเดอร์แล้ว</button>}</footer></article>)}</div></>;
-}
-
-function SellerMenu({ menu, toggle, showForm, setShowForm, addMenu }: any) { const [name, setName] = useState(""); const [price, setPrice] = useState("75"); return <><DashboardTop title="เมนูอาหาร" subtitle={`${menu.length} เมนู · เปิดขาย ${menu.filter((m: any) => m.isAvailable).length} เมนู`} /><div className="page-actions"><SearchBox value="" onChange={() => null} placeholder="ค้นหาเมนู" /><button className="primary-button fit" onClick={() => setShowForm(true)}><Plus size={19} /> เพิ่มเมนูใหม่</button></div><div className="manage-menu-grid">{menu.map((item: any) => <article key={item.id}><img src={item.image} alt={item.name} /><div><span className="menu-category">{item.category}</span><h3>{item.name}</h3><b>{money(item.price)}</b></div><footer><button className={item.isAvailable ? "available" : "unavailable"} onClick={() => toggle(item.id)}>{item.isAvailable ? <ToggleRight size={27} /> : <ToggleLeft size={27} />}{item.isAvailable ? "เปิดขาย" : "ปิดขาย"}</button><button className="ghost-button">แก้ไข</button></footer></article>)}</div>{showForm && <div className="modal-backdrop"><form className="modal" onSubmit={(e) => { e.preventDefault(); addMenu(name, Number(price)); }}><button type="button" className="close" onClick={() => setShowForm(false)}><X /></button><span className="kicker">เพิ่มรายการอาหาร</span><h2>เมนูใหม่</h2><label>ชื่อเมนู<input required value={name} onChange={(e) => setName(e.target.value)} placeholder="เช่น ข้าวกะเพราไก่" /></label><label>ราคา (บาท)<input required type="number" value={price} onChange={(e) => setPrice(e.target.value)} /></label><label>หมวดหมู่<select><option>ข้าว</option><option>เส้น</option><option>เครื่องดื่ม</option></select></label><label className="upload-box"><Plus /> แตะเพื่อเพิ่มรูปอาหาร<input type="file" accept="image/*" /></label><button className="primary-button" type="submit">บันทึกเมนู</button></form></div>}</>;
-}
-
-function MiniChart() { return <div className="chart"><div className="chart-grid" /><div className="chart-bars">{[38, 52, 45, 68, 62, 80, 91].map((h, i) => <span key={i} style={{ height: `${h}%` }}><i /></span>)}</div><div className="chart-labels">{["จ.", "อ.", "พ.", "พฤ.", "ศ.", "ส.", "อา."].map((d) => <span key={d}>{d}</span>)}</div></div>; }
-function SellerReport() { return <><DashboardTop title="รายงานยอดขาย" subtitle="สรุปผลงานร้านครัวแม่อร" /><div className="filter-tabs"><button>วันนี้</button><button className="active">7 วัน</button><button>เดือนนี้</button><button>กำหนดเอง</button></div><div className="stats-grid"><StatCard label="ยอดขายรวม" value="฿52,640" change="↑ 8.2% จากสัปดาห์ก่อน" icon={WalletCards} /><StatCard label="ค่า GP" value="฿7,896" change="อัตรา GP 15%" icon={CircleDollarSign} tone="purple" /><StatCard label="รายได้สุทธิ" value="฿44,744" change="ก่อนค่าใช้จ่ายร้าน" icon={BarChart3} tone="green" /></div><section className="panel chart-panel"><div className="panel-head"><div><h2>ยอดขาย 7 วันล่าสุด</h2><p>ยอดขายรวมต่อวัน</p></div><b>เฉลี่ย ฿7,520/วัน</b></div><MiniChart /></section></>;
+function TrackingPage({ orders, back }: { orders: Order[]; back: () => void }) {
+  const order = orders[0];
+  return (
+    <section className="narrow-page tracking">
+      <button className="back-button" onClick={back}>
+        <ArrowLeft size={18} /> กลับหน้าหลัก
+      </button>
+      <div className="tracking-head">
+        <PackageCheck size={46} />
+        <h1>ติดตามสถานะออเดอร์</h1>
+        <p>{order ? `${order.id} · ${order.restaurant}` : "ยังไม่มีออเดอร์ล่าสุด"}</p>
+      </div>
+      {order ? (
+        <div className="tracking-card">
+          {(["pending", "accepted", "preparing", "ready", "completed"] as OrderStatusDb[]).map((status) => (
+            <div className={`track-step ${order.status === status ? "active" : ""}`} key={status}>
+              <Check size={18} />
+              <span>{statusText[status]}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <EmptyState title="ยังไม่มีออเดอร์" text="เมื่อสั่งอาหารสำเร็จ ระบบจะพามาหน้านี้ทันที" />
+      )}
+    </section>
+  );
 }
 
-function ShopSettings({ flash }: any) { return <><DashboardTop title="ข้อมูลร้านค้า" subtitle="จัดการข้อมูลที่ลูกค้าเห็น" /><form className="settings-form" onSubmit={(e) => { e.preventDefault(); flash("บันทึกข้อมูลร้านแล้ว"); }}><div className="shop-cover"><img src={restaurants[0].image} alt="ครัวแม่อร" /><button type="button">เปลี่ยนรูปร้าน</button></div><div className="form-grid"><label>ชื่อร้าน<input defaultValue="ครัวแม่อร" /></label><label>เบอร์โทร<input defaultValue="081-234-5678" /></label><label className="full">คำอธิบายร้าน<textarea defaultValue="อาหารตามสั่งรสมือแม่ วัตถุดิบสดใหม่ทุกวัน" /></label><label>เวลาเปิด<input type="time" defaultValue="08:00" /></label><label>เวลาปิด<input type="time" defaultValue="20:30" /></label><label className="full">ที่อยู่<textarea defaultValue="49 ถนนสุขุมวิท แขวงคลองตันเหนือ เขตวัฒนา กรุงเทพฯ" /></label></div><button className="primary-button fit">บันทึกข้อมูลร้าน</button></form></>;
+function DashboardTop({ title, subtitle }: { title: string; subtitle: string }) {
+  return (
+    <div className="dashboard-top">
+      <div>
+        <span className="kicker">อิ่มดี</span>
+        <h1>{title}</h1>
+        <p>{subtitle}</p>
+      </div>
+      <div className="date-pill">
+        <Clock3 size={17} />
+        {new Date().toLocaleDateString("th-TH", { dateStyle: "medium" })}
+      </div>
+    </div>
+  );
 }
 
-function AdminDashboard({ go }: any) { return <><DashboardTop title="ภาพรวมระบบ" subtitle="ข้อมูลอิ่มดีแบบเรียลไทม์" /><div className="stats-grid admin-stats"><StatCard label="ยอดขายรวมเดือนนี้" value="฿1.84M" change="↑ 14.2% จากเดือนก่อน" icon={WalletCards} /><StatCard label="GP ที่ระบบได้รับ" value="฿284,620" change="เฉลี่ย 15.5%" icon={CircleDollarSign} tone="purple" /><StatCard label="ร้านค้าทั้งหมด" value="248" change="8 ร้านรออนุมัติ" icon={Store} tone="blue" /><StatCard label="ออเดอร์ทั้งหมด" value="12,842" change="186 ออเดอร์วันนี้" icon={ShoppingBag} tone="green" /></div><div className="dashboard-grid admin-grid"><section className="panel chart-panel"><div className="panel-head"><div><h2>ยอดขายทั้งระบบ</h2><p>7 วันล่าสุด</p></div><b className="success-text">↑ 12.8%</b></div><MiniChart /></section><section className="panel action-list"><div className="panel-head"><div><h2>รายการที่ต้องดำเนินการ</h2><p>ตรวจสอบและจัดการทันที</p></div></div><button onClick={() => go("admin-shops")}><span className="warning-icon"><Store /></span><p><b>ร้านค้ารออนุมัติ</b><small>มี 8 ร้านที่รอการตรวจสอบ</small></p><strong>8</strong><ChevronRight /></button><button onClick={() => go("admin-orders")}><span className="blue-icon"><ShoppingBag /></span><p><b>ออเดอร์มีปัญหา</b><small>ต้องการความช่วยเหลือจากระบบ</small></p><strong>3</strong><ChevronRight /></button><button onClick={() => go("admin-gp")}><span className="purple-icon"><Settings /></span><p><b>ตั้งค่า GP ร้านค้า</b><small>จัดการอัตราค่าบริการ</small></p><ChevronRight /></button></section></div><section className="panel"><div className="panel-head"><div><h2>ร้านค้ายอดขายสูงสุด</h2><p>ประจำเดือนกรกฎาคม</p></div><button className="text-button" onClick={() => go("admin-report")}>ดูรายงาน <ChevronRight /></button></div><div className="ranking">{restaurants.slice(0, 3).map((r, i) => <div key={r.id}><b className="rank">{i + 1}</b><img src={r.image} alt="" /><span><b>{r.name}</b><small>{452 - i * 67} ออเดอร์</small></span><strong>{money(148200 - i * 17350)}</strong></div>)}</div></section></>;
+function StatCard({ label, value, change, icon: Icon, tone = "" }: any) {
+  return (
+    <article className={`stat-card ${tone}`}>
+      <div className="stat-icon">
+        <Icon size={22} />
+      </div>
+      <p>{label}</p>
+      <h2>{value}</h2>
+      <span>{change}</span>
+    </article>
+  );
 }
 
-function AdminShops({ gp, setGp, flash }: any) { return <><DashboardTop title="จัดการร้านค้า" subtitle="248 ร้าน · รออนุมัติ 8 ร้าน" /><div className="page-actions"><SearchBox value="" onChange={() => null} placeholder="ค้นหาชื่อร้าน หรือเจ้าของร้าน" /><button className="ghost-button"><MenuIcon size={18} /> ตัวกรอง</button></div><section className="panel"><div className="table-wrap"><table><thead><tr><th>ร้านค้า</th><th>สถานะ</th><th>ยอดขายเดือนนี้</th><th>GP</th><th>จัดการ</th></tr></thead><tbody>{restaurants.map((r) => <tr key={r.id}><td><div className="shop-cell"><img src={r.image} alt="" /><span><b>{r.name}</b><small>เจ้าของ: คุณ{r.id === "r1" ? "อรทัย" : "สมใจ"}</small></span></div></td><td><Status status={r.status === "approved" ? "อนุมัติแล้ว" : "รอตรวจสอบ"} /></td><td><b>{money(48200 - Number(r.id.slice(1)) * 4300)}</b></td><td><select value={gp[r.id]} onChange={(e) => setGp({ ...gp, [r.id]: Number(e.target.value) })}>{[10, 15, 20, 25].map((n) => <option key={n} value={n}>{n}%</option>)}</select></td><td>{r.status === "pending" ? <button className="small-primary" onClick={() => flash(`อนุมัติร้าน ${r.name} แล้ว`)}>อนุมัติ</button> : <button className="ghost-button small">ดูข้อมูล</button>}</td></tr>)}</tbody></table></div></section></>;
+function RestaurantNotice({ restaurant }: { restaurant: Restaurant | null }) {
+  if (!restaurant) return <div className="status-alert warning">ยังไม่พบร้านของบัญชีนี้ กรุณาสมัครร้านหรือให้ Admin ตรวจสอบ profile</div>;
+  if (restaurant.status === "pending") return <div className="status-alert warning">ร้านของคุณยังรออนุมัติจาก Admin ลูกค้าจะยังไม่เห็นร้านนี้</div>;
+  if (restaurant.status === "suspended") return <div className="status-alert danger">ร้านของคุณถูกระงับชั่วคราว ระบบจะไม่รับออเดอร์ใหม่</div>;
+  return <div className="status-alert success">ร้านอนุมัติแล้ว ลูกค้าสามารถเห็นร้านและสั่งอาหารได้</div>;
 }
 
-function AdminUsers() { const users = [["ณิชา สายใจ", "ลูกค้า", "12 ออเดอร์", "13 ก.ค. 2569"], ["อรทัย ใจดี", "ผู้ขาย", "ครัวแม่อร", "2 ก.พ. 2569"], ["ศุภชัย มั่นคง", "ลูกค้า", "8 ออเดอร์", "8 ก.ค. 2569"], ["พิมพ์ชนก แสงทอง", "ผู้ขาย", "บ้านหวานละมุน", "15 มี.ค. 2569"]]; return <><DashboardTop title="จัดการผู้ใช้งาน" subtitle="ลูกค้า 18,420 คน · ผู้ขาย 248 คน" /><div className="page-actions"><SearchBox value="" onChange={() => null} placeholder="ค้นหาชื่อ เบอร์โทร หรืออีเมล" /></div><section className="panel"><div className="table-wrap"><table><thead><tr><th>ชื่อผู้ใช้งาน</th><th>บทบาท</th><th>ข้อมูล</th><th>สมัครเมื่อ</th><th>สถานะ</th></tr></thead><tbody>{users.map((u) => <tr key={u[0]}><td><div className="user-row"><div className="avatar">{u[0][0]}</div><b>{u[0]}</b></div></td><td><span className="role-tag">{u[1]}</span></td><td>{u[2]}</td><td>{u[3]}</td><td><span className="status success">ใช้งานปกติ</span></td></tr>)}</tbody></table></div></section></>;
+function SellerDashboard({ restaurant, orders, summary, go, updateOrder }: any) {
+  const pending = orders.find((order: Order) => order.status === "pending");
+  return (
+    <>
+      <DashboardTop title="ภาพรวมร้านค้า" subtitle={restaurant?.name ?? "ร้านของคุณ"} />
+      <RestaurantNotice restaurant={restaurant} />
+      <div className="stats-grid seller-stats">
+        <StatCard label="ยอดขายวันนี้" value={money(Number(summary.today?.food_total ?? 0))} change="นับเฉพาะออเดอร์สำเร็จ" icon={WalletCards} />
+        <StatCard label="ออเดอร์วันนี้" value={`${summary.today?.orders ?? 0}`} change="completed เท่านั้น" icon={ShoppingBag} tone="blue" />
+        <StatCard label="ค่า GP วันนี้" value={money(Number(summary.today?.gp_amount ?? 0))} change={`GP ร้าน ${restaurant?.gpPercent ?? 0}%`} icon={CircleDollarSign} tone="purple" />
+        <StatCard label="รายได้สุทธิวันนี้" value={money(Number(summary.today?.net_income ?? 0))} change="หลังหัก GP" icon={BarChart3} tone="green" />
+      </div>
+      {pending && (
+        <section className="urgent-order">
+          <div className="urgent-head">
+            <span>
+              <i /> ออเดอร์ใหม่
+            </span>
+            <b>{pending.time}</b>
+          </div>
+          <div className="urgent-body">
+            <div className="order-number">
+              <small>เลขออเดอร์</small>
+              <h2>{pending.id}</h2>
+              <span>{pending.customer}</span>
+            </div>
+            <div className="order-detail">
+              <h3>{pending.items}</h3>
+              <p>{pending.note || "ไม่มีหมายเหตุ"}</p>
+              <span>{pending.address || "ไม่ระบุที่อยู่"}</span>
+            </div>
+            <div className="order-total">
+              <small>ยอดรวม</small>
+              <h2>{money(pending.total)}</h2>
+            </div>
+          </div>
+          <div className="order-actions">
+            <button className="reject" onClick={() => updateOrder(pending, "rejected")}>
+              ปฏิเสธ
+            </button>
+            <button className="accept" onClick={() => updateOrder(pending, "accepted")}>
+              รับออเดอร์
+            </button>
+          </div>
+        </section>
+      )}
+      <section className="panel action-list">
+        <div className="panel-head">
+          <div>
+            <h2>ทางลัดจัดการร้าน</h2>
+            <p>งานหลักของแม่ค้าอยู่ในเมนูนี้</p>
+          </div>
+        </div>
+        <button onClick={() => go("seller-orders")}>
+          <span>
+            <ShoppingBag />
+          </span>
+          <p>
+            <b>ดูออเดอร์ทั้งหมด</b>
+            <small>รับออเดอร์และเปลี่ยนสถานะ</small>
+          </p>
+          <ChevronRight />
+        </button>
+        <button onClick={() => go("seller-menu")}>
+          <span>
+            <CookingPot />
+          </span>
+          <p>
+            <b>จัดการเมนูอาหาร</b>
+            <small>เพิ่ม แก้ไข ปิดขาย หรือลบเมนู</small>
+          </p>
+          <ChevronRight />
+        </button>
+      </section>
+    </>
+  );
 }
 
-function GpSettings({ gp, setGp, flash }: any) { const [defaultGp, setDefaultGp] = useState(15); return <><DashboardTop title="ตั้งค่าค่า GP" subtitle="กำหนดค่าบริการระบบสำหรับร้านค้า" /><section className="gp-banner"><div><CircleDollarSign size={28} /><span><b>GP เริ่มต้นของระบบ</b><small>ใช้กับร้านค้าใหม่ที่ยังไม่ได้กำหนดอัตราเฉพาะ</small></span></div><div className="gp-choice">{[10, 15, 20, 25].map((n) => <button className={defaultGp === n ? "active" : ""} onClick={() => setDefaultGp(n)} key={n}>{n}%</button>)}</div></section><section className="panel"><div className="panel-head"><div><h2>อัตรา GP รายร้าน</h2><p>ร้านค้าแต่ละแห่งสามารถมีอัตราไม่เท่ากันได้</p></div><button className="primary-button fit" onClick={() => flash("บันทึกการตั้งค่า GP แล้ว")}>บันทึกการเปลี่ยนแปลง</button></div><div className="gp-list">{restaurants.map((r) => <div key={r.id}><img src={r.image} alt="" /><span><b>{r.name}</b><small>ยอดขายเดือนนี้ {money(78500 - Number(r.id.slice(1)) * 5400)}</small></span><select value={gp[r.id]} onChange={(e) => setGp({ ...gp, [r.id]: Number(e.target.value) })}>{[10, 15, 20, 25].map((n) => <option key={n} value={n}>{n}%</option>)}</select><strong>GP เดือนนี้<br />{money((78500 - Number(r.id.slice(1)) * 5400) * gp[r.id] / 100)}</strong></div>)}</div></section><div className="formula-card"><ShieldCheck size={25} /><div><b>สูตรการคำนวณที่โปร่งใส</b><p>GP = ยอดอาหารรวม × เปอร์เซ็นต์ GP · รายได้สุทธิร้าน = ยอดอาหารรวม − GP</p></div></div></>;
+function SellerMenu({ restaurant, menu, categories, refresh, flash }: { restaurant: Restaurant | null; menu: MenuItem[]; categories: Category[]; refresh: () => Promise<void>; flash: (message: string) => void }) {
+  const [editing, setEditing] = useState<MenuItem | null>(null);
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <DashboardTop title="จัดการเมนู" subtitle="เพิ่ม แก้ไข ลบ และเปิด/ปิดการขายเมนู" />
+      <RestaurantNotice restaurant={restaurant} />
+      <div className="page-actions">
+        <SearchBox value="" onChange={() => null} placeholder="ค้นหาเมนู" />
+        <button className="primary-button fit" disabled={!restaurant} onClick={() => setOpen(true)}>
+          <Plus size={19} /> เพิ่มเมนูใหม่
+        </button>
+      </div>
+      <div className="manage-menu-grid">
+        {menu.map((item) => (
+          <article key={item.id}>
+            <img src={item.image} alt={item.name} />
+            <div>
+              <span className="menu-category">{item.category}</span>
+              <h3>{item.name}</h3>
+              <p>{item.description}</p>
+              <b>{money(item.price)}</b>
+            </div>
+            <footer>
+              <button
+                className={item.isAvailable ? "available" : "unavailable"}
+                onClick={async () => {
+                  await updateMenu(item.id, { isAvailable: !item.isAvailable });
+                  await refresh();
+                }}
+              >
+                {item.isAvailable ? <ToggleRight size={27} /> : <ToggleLeft size={27} />}
+                {item.isAvailable ? "เปิดขาย" : "ปิดขาย"}
+              </button>
+              <button className="ghost-button small" onClick={() => setEditing(item)}>
+                แก้ไข
+              </button>
+              <button
+                className="ghost-button small danger"
+                onClick={async () => {
+                  await deleteMenu(item.id);
+                  await refresh();
+                  flash("ลบเมนูแล้ว");
+                }}
+              >
+                <Trash2 size={15} />
+              </button>
+            </footer>
+          </article>
+        ))}
+      </div>
+      {!menu.length && <EmptyState title="ยังไม่มีเมนู" text="เพิ่มเมนูแรกของร้านเพื่อให้ลูกค้าเริ่มสั่งได้หลังอนุมัติ" />}
+      {(open || editing) && <MenuModal restaurant={restaurant} categories={categories} item={editing} onClose={() => { setOpen(false); setEditing(null); }} refresh={refresh} flash={flash} />}
+    </>
+  );
 }
 
-function AdminReport() { return <><DashboardTop title="รายงานระบบ" subtitle="ภาพรวมผลประกอบการและข้อมูลเชิงลึก" /><div className="filter-tabs"><button>7 วัน</button><button className="active">เดือนนี้</button><button>ไตรมาส</button><button>กำหนดเอง</button></div><div className="stats-grid"><StatCard label="ยอดขายรวม" value="฿1,835,420" change="↑ 14.2%" icon={WalletCards} /><StatCard label="GP รวม" value="฿284,620" change="15.5% ของยอดขาย" icon={CircleDollarSign} tone="purple" /><StatCard label="ลูกค้าใหม่" value="1,248" change="↑ 9.8%" icon={Users} tone="blue" /></div><div className="dashboard-grid"><section className="panel chart-panel"><div className="panel-head"><div><h2>ยอดขายรายวัน</h2><p>เทียบกับเดือนก่อน</p></div></div><MiniChart /></section><section className="panel"><div className="panel-head"><div><h2>เมนูขายดีที่สุด</h2><p>ตามจำนวนที่ขาย</p></div></div><div className="best-menu">{initialMenu.slice(0, 4).map((m, i) => <div key={m.id}><b>{i + 1}</b><img src={m.image} alt="" /><span><strong>{m.name}</strong><small>{184 - i * 21} จาน</small></span><em>{money((184 - i * 21) * m.price)}</em></div>)}</div></section></div></>;
+function MenuModal({ restaurant, categories, item, onClose, refresh, flash }: any) {
+  const [name, setName] = useState(item?.name ?? "");
+  const [description, setDescription] = useState(item?.description ?? "");
+  const [price, setPrice] = useState(String(item?.price ?? ""));
+  const [imageUrl, setImageUrl] = useState(item?.image ?? "");
+  const [categoryId, setCategoryId] = useState(item?.categoryId ?? categories[0]?.id ?? "");
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!restaurant) return;
+    if (item) await updateMenu(item.id, { name, description, price: Number(price), imageUrl, categoryId });
+    else await createMenu({ restaurantId: restaurant.id, name, description, price: Number(price), imageUrl, categoryId });
+    await refresh();
+    flash(item ? "แก้ไขเมนูแล้ว" : "เพิ่มเมนูลง Supabase แล้ว");
+    onClose();
+  };
+
+  return (
+    <div className="modal-backdrop">
+      <form className="modal" onSubmit={submit}>
+        <button type="button" className="close" onClick={onClose}>
+          <X />
+        </button>
+        <span className="kicker">{item ? "แก้ไขรายการอาหาร" : "เพิ่มรายการอาหาร"}</span>
+        <h2>{item ? "แก้ไขเมนู" : "เมนูใหม่"}</h2>
+        <label>
+          ชื่อเมนู
+          <input required value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <label>
+          รายละเอียด
+          <textarea required value={description} onChange={(event) => setDescription(event.target.value)} />
+        </label>
+        <label>
+          ราคา
+          <input required min="0" type="number" value={price} onChange={(event) => setPrice(event.target.value)} />
+        </label>
+        <label>
+          หมวดหมู่
+          <select value={categoryId} onChange={(event) => setCategoryId(event.target.value)}>
+            {categories.map((cat: Category) => (
+              <option key={cat.id} value={cat.id}>
+                {cat.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          รูปภาพ URL
+          <input value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} placeholder="https://..." />
+        </label>
+        <button className="primary-button" type="submit">
+          บันทึกเมนู
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function OrdersBoard({ orders, updateOrder, admin = false }: { orders: Order[]; updateOrder: (order: Order, status: OrderStatusDb) => Promise<void>; admin?: boolean }) {
+  const nextStatus = (status: OrderStatusDb): OrderStatusDb | null => {
+    if (status === "pending") return "accepted";
+    if (status === "accepted") return "preparing";
+    if (status === "preparing") return "ready";
+    if (status === "ready") return "completed";
+    return null;
+  };
+
+  return (
+    <>
+      <DashboardTop title={admin ? "ออเดอร์ทั้งหมด" : "จัดการออเดอร์"} subtitle="รับออเดอร์ ปฏิเสธ และเปลี่ยนสถานะตามลำดับ" />
+      <div className="filter-tabs">
+        {(["pending", "accepted", "preparing", "ready", "completed", "rejected"] as OrderStatusDb[]).map((status) => (
+          <button key={status}>
+            {statusText[status]} <b>{orders.filter((order) => order.status === status).length}</b>
+          </button>
+        ))}
+      </div>
+      <div className="order-board">
+        {orders.map((order) => {
+          const next = nextStatus(order.status);
+          return (
+            <article className={`order-card-large ${order.status === "pending" ? "highlight" : ""}`} key={order.dbId || order.id}>
+              <header>
+                <div>
+                  <ShoppingBag size={20} />
+                  <span>
+                    <h2>{order.id}</h2>
+                    <small>{order.time} · {order.restaurant}</small>
+                  </span>
+                </div>
+                <Status status={statusText[order.status]} />
+              </header>
+              <div className="order-customer">
+                <UserRound size={18} />
+                <span>
+                  <b>{order.customer}</b>
+                  <small>{order.address || "ไม่ระบุที่อยู่"}</small>
+                </span>
+              </div>
+              <div className="order-items">
+                <p>{order.items}</p>
+                {order.note && <span>{order.note}</span>}
+              </div>
+              <div className="order-money">
+                <span>ยอดอาหาร <b>{money(order.foodTotal)}</b></span>
+                <span>ค่า GP <b>{money(order.gpAmount)}</b></span>
+                <span>รายได้สุทธิ <b>{money(order.net)}</b></span>
+                <span>ลูกค้าจ่าย <b>{money(order.total)}</b></span>
+              </div>
+              <footer>
+                {order.status === "pending" && (
+                  <button className="reject" onClick={() => updateOrder(order, "rejected")}>
+                    ปฏิเสธ
+                  </button>
+                )}
+                {next && (
+                  <button className="accept" onClick={() => updateOrder(order, next)}>
+                    {order.status === "pending" ? "รับออเดอร์" : `เปลี่ยนเป็น ${statusText[next]}`}
+                  </button>
+                )}
+              </footer>
+            </article>
+          );
+        })}
+      </div>
+      {!orders.length && <EmptyState title="ยังไม่มีออเดอร์" text="เมื่อมีลูกค้าสั่งอาหาร ออเดอร์จะแสดงที่นี่" />}
+    </>
+  );
+}
+
+function SellerReport({ summary, orders }: { summary: typeof emptySellerSummary; orders: Order[] }) {
+  const completed = orders.filter((order) => order.status === "completed");
+  return (
+    <>
+      <DashboardTop title="รายงานยอดขาย" subtitle="นับเฉพาะออเดอร์สถานะสำเร็จ" />
+      <div className="stats-grid">
+        <StatCard label="ยอดขายวันนี้" value={money(Number(summary.today?.food_total ?? 0))} change={`${summary.today?.orders ?? 0} ออเดอร์`} icon={WalletCards} />
+        <StatCard label="ค่า GP วันนี้" value={money(Number(summary.today?.gp_amount ?? 0))} change="หักจากยอดอาหาร" icon={CircleDollarSign} tone="purple" />
+        <StatCard label="รายได้สุทธิวันนี้" value={money(Number(summary.today?.net_income ?? 0))} change="หลังหัก GP" icon={BarChart3} tone="green" />
+      </div>
+      <section className="panel chart-panel">
+        <div className="panel-head">
+          <div>
+            <h2>ยอดขาย 7 วันล่าสุด</h2>
+            <p>คำนวณจาก completed orders</p>
+          </div>
+          <b>{money(Number(summary.month?.food_total ?? 0))} เดือนนี้</b>
+        </div>
+        <MiniChart data={summary.last_7_days ?? []} />
+      </section>
+      <OrdersTable orders={completed} />
+    </>
+  );
+}
+
+function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant | null; refresh: () => Promise<void>; flash: (message: string) => void }) {
+  const [form, setForm] = useState(() => ({
+    name: restaurant?.name ?? "",
+    description: restaurant?.description ?? "",
+    phone: restaurant?.phone ?? "",
+    address: restaurant?.address ?? "",
+    openTime: restaurant?.openTime ?? "08:00",
+    closeTime: restaurant?.closeTime ?? "20:00",
+    image: restaurant?.image ?? "",
+    isOpen: restaurant?.isOpen ?? false,
+  }));
+
+  useEffect(() => {
+    const syncTimer = window.setTimeout(() => {
+      setForm({
+        name: restaurant?.name ?? "",
+        description: restaurant?.description ?? "",
+        phone: restaurant?.phone ?? "",
+        address: restaurant?.address ?? "",
+        openTime: restaurant?.openTime ?? "08:00",
+        closeTime: restaurant?.closeTime ?? "20:00",
+        image: restaurant?.image ?? "",
+        isOpen: restaurant?.isOpen ?? false,
+      });
+    }, 0);
+    return () => window.clearTimeout(syncTimer);
+  }, [restaurant]);
+
+  const update = (key: keyof typeof form, value: string | boolean) => setForm((current) => ({ ...current, [key]: value }));
+
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!restaurant) return;
+    await updateSellerRestaurant(restaurant.id, form);
+    await refresh();
+    flash("บันทึกข้อมูลร้านแล้ว");
+  };
+
+  return (
+    <>
+      <DashboardTop title="ข้อมูลร้านค้า" subtitle="Seller แก้ข้อมูลร้านได้ แต่แก้ status และ GP เองไม่ได้" />
+      <RestaurantNotice restaurant={restaurant} />
+      {restaurant && (
+        <form className="settings-form" onSubmit={submit}>
+          <div className="shop-cover">
+            <img src={form.image} alt={form.name} />
+          </div>
+          <div className="form-grid">
+            <label>
+              ชื่อร้าน
+              <input value={form.name} onChange={(event) => update("name", event.target.value)} />
+            </label>
+            <label>
+              เบอร์โทร
+              <input value={form.phone} onChange={(event) => update("phone", event.target.value)} />
+            </label>
+            <label className="full">
+              คำอธิบายร้าน
+              <textarea value={form.description} onChange={(event) => update("description", event.target.value)} />
+            </label>
+            <label>
+              เวลาเปิด
+              <input type="time" value={form.openTime} onChange={(event) => update("openTime", event.target.value)} />
+            </label>
+            <label>
+              เวลาปิด
+              <input type="time" value={form.closeTime} onChange={(event) => update("closeTime", event.target.value)} />
+            </label>
+            <label className="full">
+              ที่อยู่
+              <textarea value={form.address} onChange={(event) => update("address", event.target.value)} />
+            </label>
+            <label className="full">
+              รูปร้าน URL
+              <input value={form.image} onChange={(event) => update("image", event.target.value)} />
+            </label>
+          </div>
+          <label className="toggle-line">
+            <input type="checkbox" checked={form.isOpen} onChange={(event) => update("isOpen", event.target.checked)} />
+            เปิดร้านรับออเดอร์
+          </label>
+          <button className="primary-button fit">บันทึกข้อมูลร้าน</button>
+        </form>
+      )}
+    </>
+  );
+}
+
+function AdminDashboard({ summary, shops, orders, go }: any) {
+  return (
+    <>
+      <DashboardTop title="ภาพรวมระบบ" subtitle="ยอดขายและ GP จากออเดอร์สำเร็จ" />
+      <div className="stats-grid admin-stats">
+        <StatCard label="ยอดขายวันนี้" value={money(Number(summary.today?.food_total ?? 0))} change={`${summary.today?.orders ?? 0} ออเดอร์`} icon={WalletCards} />
+        <StatCard label="GP วันนี้" value={money(Number(summary.today?.gp_amount ?? 0))} change="รายได้ระบบ" icon={CircleDollarSign} tone="purple" />
+        <StatCard label="ร้านทั้งหมด" value={`${shops.length}`} change={`${summary.restaurants?.pending ?? 0} ร้านรออนุมัติ`} icon={Store} tone="blue" />
+        <StatCard label="ออเดอร์ทั้งหมด" value={`${orders.length}`} change="ตามสิทธิ์ admin" icon={ShoppingBag} tone="green" />
+      </div>
+      <section className="panel action-list">
+        <div className="panel-head">
+          <div>
+            <h2>รายการที่ต้องดำเนินการ</h2>
+            <p>จัดการร้านและ GP ได้จากหน้านี้</p>
+          </div>
+        </div>
+        <button onClick={() => go("admin-shops")}>
+          <span className="warning-icon">
+            <Store />
+          </span>
+          <p>
+            <b>ร้านค้ารออนุมัติ</b>
+            <small>pending จะไม่แสดงบนหน้าลูกค้า</small>
+          </p>
+          <strong>{summary.restaurants?.pending ?? 0}</strong>
+          <ChevronRight />
+        </button>
+        <button onClick={() => go("admin-gp")}>
+          <span className="purple-icon">
+            <Settings />
+          </span>
+          <p>
+            <b>ตั้งค่า GP รายร้าน</b>
+            <small>มีผลเฉพาะออเดอร์ใหม่</small>
+          </p>
+          <ChevronRight />
+        </button>
+      </section>
+    </>
+  );
+}
+
+function AdminShops({ shops, refresh, flash }: { shops: Restaurant[]; refresh: () => Promise<void>; flash: (message: string) => void }) {
+  const [filter, setFilter] = useState<RestaurantStatus | "all">("all");
+  const visible = filter === "all" ? shops : shops.filter((shop) => shop.status === filter);
+
+  const changeShop = async (shop: Restaurant, input: Partial<{ status: RestaurantStatus; gpPercent: number }>) => {
+    await updateRestaurantAdmin(shop.id, input);
+    await refresh();
+    flash("อัปเดตร้านค้าแล้ว");
+  };
+
+  return (
+    <>
+      <DashboardTop title="จัดการร้านค้า" subtitle="อนุมัติ ระงับ และแก้ค่า GP ของแต่ละร้าน" />
+      <div className="filter-tabs">
+        {(["all", "pending", "approved", "suspended"] as const).map((status) => (
+          <button className={filter === status ? "active" : ""} key={status} onClick={() => setFilter(status)}>
+            {status === "all" ? "ทั้งหมด" : shopStatusText[status]} <b>{status === "all" ? shops.length : shops.filter((shop) => shop.status === status).length}</b>
+          </button>
+        ))}
+      </div>
+      <section className="panel">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ร้านค้า</th>
+                <th>เจ้าของ/ติดต่อ</th>
+                <th>เวลาเปิด</th>
+                <th>สถานะ</th>
+                <th>GP</th>
+                <th>จัดการ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((shop) => (
+                <tr key={shop.id}>
+                  <td>
+                    <div className="shop-cell">
+                      <img src={shop.image} alt="" />
+                      <span>
+                        <b>{shop.name}</b>
+                        <small>{shop.address || "ไม่ระบุที่อยู่"}</small>
+                      </span>
+                    </div>
+                  </td>
+                  <td>
+                    <b>{shop.ownerName || "ไม่ระบุ"}</b>
+                    <small>{shop.phone || "-"}</small>
+                  </td>
+                  <td>
+                    {shop.openTime} - {shop.closeTime}
+                  </td>
+                  <td>
+                    <ShopStatus status={shop.status} />
+                  </td>
+                  <td>
+                    <select value={shop.gpPercent} onChange={(event) => changeShop(shop, { gpPercent: Number(event.target.value) })}>
+                      {[10, 15, 20, 25].map((value) => (
+                        <option key={value} value={value}>
+                          {value}%
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                  <td>
+                    <div className="table-actions">
+                      {shop.status !== "approved" && (
+                        <button className="small-primary" onClick={() => changeShop(shop, { status: "approved" })}>
+                          อนุมัติ
+                        </button>
+                      )}
+                      {shop.status !== "suspended" && (
+                        <button className="ghost-button small danger" onClick={() => changeShop(shop, { status: "suspended" })}>
+                          ระงับ
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function AdminUsers({ users }: { users: ProfileRow[] }) {
+  return (
+    <>
+      <DashboardTop title="จัดการผู้ใช้" subtitle="ดูบัญชีลูกค้า ผู้ขาย และ admin" />
+      <section className="panel">
+        <div className="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ชื่อผู้ใช้</th>
+                <th>อีเมล</th>
+                <th>โทรศัพท์</th>
+                <th>บทบาท</th>
+                <th>สมัครเมื่อ</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((user) => (
+                <tr key={user.id}>
+                  <td>
+                    <div className="user-row">
+                      <div className="avatar">{user.name[0]}</div>
+                      <b>{user.name}</b>
+                    </div>
+                  </td>
+                  <td>{user.email || "-"}</td>
+                  <td>{user.phone || "-"}</td>
+                  <td>
+                    <span className="role-tag">{roleLabel(user.role)}</span>
+                  </td>
+                  <td>{new Date(user.createdAt).toLocaleDateString("th-TH")}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </>
+  );
+}
+
+function GpSettings({ shops, refresh, flash }: { shops: Restaurant[]; refresh: () => Promise<void>; flash: (message: string) => void }) {
+  return (
+    <>
+      <DashboardTop title="ตั้งค่าค่า GP" subtitle="ค่า GP ถูก snapshot ลงออเดอร์เมื่อ customer สั่งอาหาร" />
+      <section className="gp-banner">
+        <div>
+          <CircleDollarSign size={28} />
+          <span>
+            <b>สูตร GP</b>
+            <small>GP = ยอดอาหารรวม × เปอร์เซ็นต์ GP, ไม่รวมค่าจัดส่ง</small>
+          </span>
+        </div>
+        <ShieldCheck />
+      </section>
+      <section className="panel">
+        <div className="gp-list">
+          {shops.map((shop) => (
+            <div key={shop.id}>
+              <img src={shop.image} alt="" />
+              <span>
+                <b>{shop.name}</b>
+                <small>{shopStatusText[shop.status]}</small>
+              </span>
+              <select
+                value={shop.gpPercent}
+                onChange={async (event) => {
+                  await updateRestaurantAdmin(shop.id, { gpPercent: Number(event.target.value) });
+                  await refresh();
+                  flash("บันทึกค่า GP แล้ว");
+                }}
+              >
+                {[10, 15, 20, 25].map((value) => (
+                  <option key={value} value={value}>
+                    {value}%
+                  </option>
+                ))}
+              </select>
+              <strong>
+                GP ปัจจุบัน
+                <br />
+                {shop.gpPercent}%
+              </strong>
+            </div>
+          ))}
+        </div>
+      </section>
+    </>
+  );
+}
+
+function AdminReport({ summary }: { summary: typeof emptyAdminSummary }) {
+  return (
+    <>
+      <DashboardTop title="รายงานระบบ" subtitle="ยอดขายรวม GP รวม ร้านขายดี และเมนูขายดี" />
+      <div className="stats-grid">
+        <StatCard label="ยอดขายวันนี้" value={money(Number(summary.today?.food_total ?? 0))} change={`${summary.today?.orders ?? 0} ออเดอร์`} icon={WalletCards} />
+        <StatCard label="GP วันนี้" value={money(Number(summary.today?.gp_amount ?? 0))} change="รายได้ระบบ" icon={CircleDollarSign} tone="purple" />
+        <StatCard label="ยอดขายเดือนนี้" value={money(Number(summary.month?.food_total ?? 0))} change={`GP ${money(Number(summary.month?.gp_amount ?? 0))}`} icon={BarChart3} tone="green" />
+      </div>
+      <div className="stats-grid">
+        <StatCard label="ร้าน pending" value={`${summary.restaurants?.pending ?? 0}`} change="รอตรวจสอบ" icon={Store} />
+        <StatCard label="ร้าน approved" value={`${summary.restaurants?.approved ?? 0}`} change="แสดงให้ลูกค้า" icon={ShieldCheck} tone="green" />
+        <StatCard label="ร้าน suspended" value={`${summary.restaurants?.suspended ?? 0}`} change="ไม่รับออเดอร์ใหม่" icon={X} tone="purple" />
+      </div>
+      <div className="dashboard-grid">
+        <section className="panel">
+          <div className="panel-head">
+            <div>
+              <h2>ร้านขายดีที่สุด</h2>
+              <p>นับจาก completed orders</p>
+            </div>
+          </div>
+          <div className="ranking">
+            {(summary.top_restaurants ?? []).map((shop, index) => (
+              <div key={shop.id}>
+                <b className="rank">{index + 1}</b>
+                <span>
+                  <b>{shop.name}</b>
+                  <small>{shop.orders} ออเดอร์</small>
+                </span>
+                <strong>{money(Number(shop.food_total ?? 0))}</strong>
+              </div>
+            ))}
+          </div>
+        </section>
+        <section className="panel">
+          <div className="panel-head">
+            <div>
+              <h2>เมนูขายดีที่สุด</h2>
+              <p>ตามจำนวนที่ขาย</p>
+            </div>
+          </div>
+          <div className="best-menu">
+            {(summary.top_menu_items ?? []).map((item, index) => (
+              <div key={item.name}>
+                <b>{index + 1}</b>
+                <span>
+                  <strong>{item.name}</strong>
+                  <small>{item.quantity} จาน</small>
+                </span>
+                <em>{money(Number(item.food_total ?? 0))}</em>
+              </div>
+            ))}
+          </div>
+        </section>
+      </div>
+    </>
+  );
+}
+
+function OrdersTable({ orders }: { orders: Order[] }) {
+  return (
+    <section className="panel">
+      <div className="panel-head">
+        <div>
+          <h2>รายการออเดอร์สำเร็จ</h2>
+          <p>ใช้เป็นฐานรายงานยอดขาย</p>
+        </div>
+      </div>
+      <div className="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>ออเดอร์</th>
+              <th>ลูกค้า</th>
+              <th>ยอดอาหาร</th>
+              <th>GP</th>
+              <th>รายได้สุทธิ</th>
+              <th>วันที่</th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.map((order) => (
+              <tr key={order.dbId || order.id}>
+                <td>{order.id}</td>
+                <td>{order.customer}</td>
+                <td>{money(order.foodTotal)}</td>
+                <td>{money(order.gpAmount)}</td>
+                <td>{money(order.net)}</td>
+                <td>{new Date(order.createdAt).toLocaleDateString("th-TH")}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function MiniChart({ data }: { data: Array<{ label: string; food_total: number }> }) {
+  const max = Math.max(1, ...data.map((point) => Number(point.food_total ?? 0)));
+  const fallback = data.length ? data : Array.from({ length: 7 }, (_, index) => ({ label: `${index + 1}`, food_total: 0 }));
+  return (
+    <div className="chart">
+      <div className="chart-grid" />
+      <div className="chart-bars">
+        {fallback.map((point) => (
+          <span key={point.label} style={{ height: `${Math.max(8, (Number(point.food_total ?? 0) / max) * 100)}%` }}>
+            <i />
+          </span>
+        ))}
+      </div>
+      <div className="chart-labels">
+        {fallback.map((point) => (
+          <span key={point.label}>{point.label.slice(5)}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function Status({ status }: { status: string }) {
+  const klass = status.includes("รอ") ? "wait" : status.includes("ทำ") ? "cook" : status.includes("พร้อม") ? "ready" : status.includes("สำเร็จ") || status.includes("อนุมัติ") ? "success" : status.includes("ปฏิเสธ") || status.includes("ยกเลิก") ? "cancel" : "";
+  return <span className={`status ${klass}`}>{status}</span>;
+}
+
+function ShopStatus({ status }: { status: RestaurantStatus }) {
+  return <span className={`status ${status === "pending" ? "wait" : status === "approved" ? "success" : "cancel"}`}>{shopStatusText[status]}</span>;
+}
+
+function EmptyState({ title, text }: { title: string; text: string }) {
+  return (
+    <div className="empty-state">
+      <div>🍽️</div>
+      <h2>{title}</h2>
+      <p>{text}</p>
+    </div>
+  );
 }

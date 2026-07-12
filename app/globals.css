@@ -93,6 +93,26 @@ img { display:block; object-fit:cover; }
 .ranking>div,.gp-list>div,.best-menu>div { display:flex;align-items:center;gap:12px;padding:11px 5px;border-bottom:1px solid #f3f4f6; }.ranking>div:last-child,.gp-list>div:last-child,.best-menu>div:last-child { border:0; }.ranking img,.gp-list img,.best-menu img { width:45px;height:45px;border-radius:11px; }.ranking>div>span,.gp-list>div>span,.best-menu span { display:flex;flex-direction:column;flex:1; }.ranking small,.gp-list small,.best-menu small { color:var(--muted);font-size:10px; }.rank { width:25px;height:25px;display:grid;place-items:center;background:#fff0e5;color:var(--primary);border-radius:8px; }.shop-cell,.user-row { display:flex;align-items:center;gap:9px; }.shop-cell img { width:42px;height:42px;border-radius:10px; }.shop-cell span { display:flex;flex-direction:column; }.table-wrap select,.gp-list select { border:1px solid var(--line);border-radius:9px;padding:7px 25px 7px 9px;background:#fff;font-weight:700; }.role-tag { background:#eef2ff;color:#4f46e5;padding:5px 8px;border-radius:15px;font-weight:700;font-size:10px; }
 .gp-banner { background:linear-gradient(115deg,#111827,#263346);color:#fff;border-radius:19px;padding:23px;display:flex;align-items:center;justify-content:space-between;margin-bottom:18px; }.gp-banner>div:first-child { display:flex;align-items:center;gap:12px; }.gp-banner span { display:flex;flex-direction:column; }.gp-banner small { color:#9ca3af; }.gp-choice { display:flex;gap:8px; }.gp-choice button { width:52px;height:42px;border:1px solid #ffffff29;background:#ffffff0c;color:#fff;border-radius:10px;font-weight:800; }.gp-choice button.active { background:var(--primary);border-color:var(--primary); }.gp-list>div>strong { width:125px;text-align:right;font-size:11px;line-height:1.5; }.formula-card { margin-top:16px;border:1px solid #bfdbfe;background:#eff6ff;color:#1d4ed8;padding:16px;border-radius:15px;display:flex;gap:12px; }.formula-card p { margin:3px 0 0;color:#475569;font-size:12px; }.best-menu>div>b { width:25px;height:25px;border-radius:8px;background:#f3f4f6;display:grid;place-items:center; }.best-menu em { font-style:normal;color:var(--green);font-weight:700;font-size:11px; }
 .toast { position:fixed;z-index:80;left:50%;bottom:28px;transform:translateX(-50%);background:var(--ink);color:#fff;border-radius:13px;padding:13px 18px;display:flex;align-items:center;gap:9px;box-shadow:0 16px 40px #11182740;font-size:13px; }.toast svg { color:#86efac; }.mobile-nav { display:none; }
+.status-alert { margin:0 0 18px;border-radius:16px;padding:14px 16px;font-size:13px;font-weight:800;border:1px solid var(--line);background:#fff; }
+.status-alert.success { color:#15803d;background:#f0fdf4;border-color:#bbf7d0; }
+.status-alert.warning { color:#c2410c;background:#fff7ed;border-color:#fed7aa; }
+.status-alert.danger { color:#b91c1c;background:#fef2f2;border-color:#fecaca; }
+.form-field { display:flex;flex-direction:column;gap:7px;margin-bottom:13px;color:#4b5563;font-size:12px;font-weight:800; }
+.form-field textarea { min-height:76px;border:1px solid var(--line);border-radius:12px;padding:10px 12px;resize:vertical;outline:0;background:#fff;color:var(--ink); }
+.form-field textarea:focus { border-color:var(--primary);box-shadow:0 0 0 3px #ff6b0015; }
+.track-step { display:flex;align-items:center;gap:12px;padding:15px 18px;border-bottom:1px solid #f3f4f6;color:#6b7280;font-weight:800; }
+.track-step:last-child { border-bottom:0; }
+.track-step svg { width:30px;height:30px;padding:7px;border-radius:50%;background:#f3f4f6;color:#9ca3af; }
+.track-step.active { color:var(--primary);background:#fff7ed; }
+.track-step.active svg { background:var(--primary);color:#fff; }
+.order-card-large.highlight { border-color:var(--primary);box-shadow:0 10px 24px #ff6b0014; }
+.order-money { margin:12px 16px 0;display:grid;grid-template-columns:1fr 1fr;gap:8px;padding:11px;border-radius:12px;background:#f9fafb;font-size:11px;color:#4b5563; }
+.order-money span { display:flex;justify-content:space-between;gap:8px; }
+.order-money b { color:var(--ink); }
+.table-actions { display:flex;align-items:center;gap:7px;flex-wrap:wrap; }
+.ghost-button.danger { color:#dc2626;border-color:#fecaca;background:#fff; }
+.toggle-line { display:flex;align-items:center;gap:10px;margin:8px 0 18px;color:#374151;font-weight:800;font-size:13px; }
+.toggle-line input { width:18px;height:18px;accent-color:var(--primary); }
 @keyframes pulse { 50% { opacity:.35; } }
 
 @media (max-width:1050px) {

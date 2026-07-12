@@ -1,63 +1,353 @@
-import { supabase } from "../lib/supabase";
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
-const statusToThai: Record<string,string> = { pending:"รอรับออเดอร์", accepted:"รอรับออเดอร์", preparing:"กำลังทำอาหาร", ready:"พร้อมส่ง", delivering:"กำลังจัดส่ง", completed:"สำเร็จ", cancelled:"ยกเลิก" };
-const statusToDb: Record<string,string> = Object.fromEntries(Object.entries(statusToThai).map(([key,value]) => [value,key]));
+import { supabase } from "../lib/supabase";
+import type { Role } from "../data/mockData";
+
+export type RestaurantStatus = "pending" | "approved" | "suspended";
+export type OrderStatusDb = "pending" | "accepted" | "preparing" | "ready" | "completed" | "rejected" | "cancelled";
+
+export type Category = {
+  id: string;
+  name: string;
+  icon: string | null;
+};
+
+export type Restaurant = {
+  id: string;
+  ownerId: string | null;
+  ownerName?: string;
+  name: string;
+  description: string;
+  image: string;
+  address: string;
+  phone: string;
+  openTime: string;
+  closeTime: string;
+  isOpen: boolean;
+  status: RestaurantStatus;
+  gpPercent: number;
+  rating: number;
+  delivery: number;
+  time: string;
+  createdAt: string;
+};
+
+export type MenuItem = {
+  id: string;
+  restaurantId: string;
+  categoryId: string | null;
+  category: string;
+  name: string;
+  description: string;
+  price: number;
+  image: string;
+  isAvailable: boolean;
+  isDeleted: boolean;
+  popular: boolean;
+  createdAt: string;
+};
+
+export type Order = {
+  id: string;
+  dbId: string;
+  orderNumber: number;
+  customer: string;
+  restaurant: string;
+  restaurantId: string;
+  items: string;
+  itemDetails: Array<{ name: string; quantity: number; note: string | null; unitPrice: number }>;
+  foodTotal: number;
+  deliveryFee: number;
+  gpPercent: number;
+  gpAmount: number;
+  net: number;
+  total: number;
+  status: OrderStatusDb;
+  time: string;
+  createdAt: string;
+  note: string;
+  address: string;
+};
+
+export type ProfileRow = {
+  id: string;
+  name: string;
+  phone: string | null;
+  email: string | null;
+  role: Role;
+  createdAt: string;
+};
+
+const fallbackRestaurantImage = "https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=1000&q=80";
+const fallbackMenuImage = "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80";
+
+function requireClient() {
+  if (!supabase) throw new Error("Supabase is not configured");
+  return supabase;
+}
+
+function mapRestaurant(row: any): Restaurant {
+  return {
+    id: row.id,
+    ownerId: row.owner_id,
+    ownerName: row.profiles?.name ?? undefined,
+    name: row.name,
+    description: row.description ?? "",
+    image: row.image_url || fallbackRestaurantImage,
+    address: row.address ?? "",
+    phone: row.phone ?? "",
+    openTime: String(row.open_time ?? "08:00").slice(0, 5),
+    closeTime: String(row.close_time ?? "20:00").slice(0, 5),
+    isOpen: Boolean(row.is_open),
+    status: row.status,
+    gpPercent: Number(row.gp_percent ?? 0),
+    rating: Number(row.rating ?? 0),
+    delivery: Number(row.delivery_fee ?? 0),
+    time: row.delivery_minutes ?? "20-30 นาที",
+    createdAt: row.created_at,
+  };
+}
+
+function mapMenuItem(row: any): MenuItem {
+  return {
+    id: row.id,
+    restaurantId: row.restaurant_id,
+    categoryId: row.category_id,
+    category: row.categories?.name ?? "อื่น ๆ",
+    name: row.name,
+    description: row.description ?? "",
+    price: Number(row.price ?? 0),
+    image: row.image_url || fallbackMenuImage,
+    isAvailable: Boolean(row.is_available),
+    isDeleted: Boolean(row.is_deleted),
+    popular: Boolean(row.is_popular),
+    createdAt: row.created_at,
+  };
+}
+
+function mapOrder(row: any): Order {
+  const itemDetails = (row.order_items ?? []).map((item: any) => ({
+    name: item.item_name,
+    quantity: Number(item.quantity ?? 0),
+    note: item.note ?? null,
+    unitPrice: Number(item.unit_price ?? 0),
+  }));
+
+  return {
+    id: `OD-${String(row.order_number ?? 0).padStart(4, "0")}`,
+    dbId: row.id,
+    orderNumber: Number(row.order_number ?? 0),
+    customer: row.customer_name ?? "ลูกค้า",
+    restaurant: row.restaurants?.name ?? "ร้านอาหาร",
+    restaurantId: row.restaurant_id,
+    items: itemDetails.map((item) => `${item.name} × ${item.quantity}`).join(", "),
+    itemDetails,
+    foodTotal: Number(row.food_total ?? 0),
+    deliveryFee: Number(row.delivery_fee ?? 0),
+    gpPercent: Number(row.gp_percent ?? 0),
+    gpAmount: Number(row.gp_amount ?? 0),
+    net: Number(row.restaurant_net_income ?? 0),
+    total: Number(row.grand_total ?? 0),
+    status: row.status,
+    time: new Date(row.created_at).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }),
+    createdAt: row.created_at,
+    note: row.customer_note ?? "",
+    address: row.address ?? "",
+  };
+}
+
+export async function getCategories() {
+  const client = requireClient();
+  const { data, error } = await client.from("categories").select("id,name,icon").eq("is_active", true).order("sort_order");
+  if (error) throw error;
+  return (data ?? []) as Category[];
+}
 
 export async function getCatalog() {
-  if (!supabase) throw new Error("Supabase is not configured");
+  const client = requireClient();
   const [{ data: restaurantRows, error: restaurantError }, { data: menuRows, error: menuError }] = await Promise.all([
-    supabase.from("restaurants").select("*").eq("status", "approved").order("created_at"),
-    supabase.from("menu_items").select("*, categories(name)").order("created_at"),
+    client.from("restaurants").select("*").eq("status", "approved").eq("is_open", true).order("created_at"),
+    client
+      .from("menu_items")
+      .select("*, categories(name)")
+      .eq("is_available", true)
+      .eq("is_deleted", false)
+      .order("created_at"),
   ]);
   if (restaurantError) throw restaurantError;
   if (menuError) throw menuError;
   return {
-    restaurants: (restaurantRows ?? []).map((r) => ({ id:r.id,name:r.name,description:r.description,image:r.image_url,rating:Number(r.rating),time:r.delivery_minutes,delivery:Number(r.delivery_fee),isOpen:r.is_open,status:r.status,gpPercent:Number(r.gp_percent) })),
-    menu: (menuRows ?? []).map((m:any) => ({ id:m.id,restaurantId:m.restaurant_id,name:m.name,description:m.description,price:Number(m.price),image:m.image_url,category:m.categories?.name ?? "อื่น ๆ",isAvailable:m.is_available,popular:m.is_popular })),
+    restaurants: (restaurantRows ?? []).map(mapRestaurant),
+    menu: (menuRows ?? []).map(mapMenuItem),
   };
 }
 
-export async function getSellerWorkspace(profileId:string) {
-  if(!supabase) throw new Error("Supabase is not configured");
-  const {data:restaurant,error}=await supabase.from("restaurants").select("*").eq("owner_id",profileId).single();
-  if(error) throw error;
-  const {data:menuRows,error:menuError}=await supabase.from("menu_items").select("*, categories(name)").eq("restaurant_id",restaurant.id).order("created_at");
-  if(menuError) throw menuError;
+export async function getSellerWorkspace(profileId: string) {
+  const client = requireClient();
+  const { data: restaurant, error } = await client
+    .from("restaurants")
+    .select("*")
+    .eq("owner_id", profileId)
+    .order("created_at")
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  if (!restaurant) return { restaurant: null, menu: [] as MenuItem[] };
+
+  const { data: menuRows, error: menuError } = await client
+    .from("menu_items")
+    .select("*, categories(name)")
+    .eq("restaurant_id", restaurant.id)
+    .eq("is_deleted", false)
+    .order("created_at", { ascending: false });
+  if (menuError) throw menuError;
+
   return {
-    restaurant:{id:restaurant.id,name:restaurant.name,description:restaurant.description,image:restaurant.image_url||"https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=1000&q=80",rating:Number(restaurant.rating),time:restaurant.delivery_minutes,delivery:Number(restaurant.delivery_fee),isOpen:restaurant.is_open,status:restaurant.status,gpPercent:Number(restaurant.gp_percent)},
-    menu:(menuRows??[]).map((m:any)=>({id:m.id,restaurantId:m.restaurant_id,name:m.name,description:m.description,price:Number(m.price),image:m.image_url||"https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=600&q=80",category:m.categories?.name??"อื่น ๆ",isAvailable:m.is_available,popular:m.is_popular})),
+    restaurant: mapRestaurant(restaurant),
+    menu: (menuRows ?? []).map(mapMenuItem),
   };
+}
+
+export async function listAdminRestaurants() {
+  const client = requireClient();
+  const { data, error } = await client
+    .from("restaurants")
+    .select("*, profiles(name)")
+    .order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map(mapRestaurant);
+}
+
+export async function updateRestaurantAdmin(id: string, input: Partial<{ status: RestaurantStatus; gpPercent: number }>) {
+  const client = requireClient();
+  const payload: Record<string, unknown> = {};
+  if (input.status) payload.status = input.status;
+  if (input.gpPercent !== undefined) payload.gp_percent = input.gpPercent;
+  const { error } = await client.from("restaurants").update(payload).eq("id", id);
+  if (error) throw error;
+}
+
+export async function updateSellerRestaurant(id: string, input: Partial<Pick<Restaurant, "name" | "description" | "phone" | "address" | "openTime" | "closeTime" | "isOpen" | "image">>) {
+  const client = requireClient();
+  const payload: Record<string, unknown> = {};
+  if (input.name !== undefined) payload.name = input.name;
+  if (input.description !== undefined) payload.description = input.description;
+  if (input.phone !== undefined) payload.phone = input.phone;
+  if (input.address !== undefined) payload.address = input.address;
+  if (input.openTime !== undefined) payload.open_time = input.openTime;
+  if (input.closeTime !== undefined) payload.close_time = input.closeTime;
+  if (input.isOpen !== undefined) payload.is_open = input.isOpen;
+  if (input.image !== undefined) payload.image_url = input.image;
+  const { error } = await client.from("restaurants").update(payload).eq("id", id);
+  if (error) throw error;
 }
 
 export async function getOrders() {
-  if (!supabase) throw new Error("Supabase is not configured");
-  const { data, error } = await supabase.from("orders").select("*, restaurants(name), order_items(item_name,quantity,note)").order("created_at", { ascending:false }).limit(50);
+  const client = requireClient();
+  const { data, error } = await client
+    .from("orders")
+    .select("*, restaurants(name), order_items(item_name,unit_price,quantity,note)")
+    .order("created_at", { ascending: false })
+    .limit(100);
   if (error) throw error;
-  return (data ?? []).map((o:any) => ({ id:`OD-${String(o.order_number).padStart(4,"0")}`,dbId:o.id,customer:o.customer_name,restaurant:o.restaurants?.name ?? "ร้านอาหาร",items:o.order_items.map((i:any)=>`${i.item_name} × ${i.quantity}`).join(", "),foodTotal:Number(o.food_total),deliveryFee:Number(o.delivery_fee),gpPercent:Number(o.gp_percent),gpAmount:Number(o.gp_amount),net:Number(o.restaurant_net_income),total:Number(o.grand_total),status:statusToThai[o.status] ?? o.status,time:new Date(o.created_at).toLocaleTimeString("th-TH",{hour:"2-digit",minute:"2-digit"}),note:o.customer_note ?? "" }));
+  return (data ?? []).map(mapOrder);
 }
 
-export async function createOrder(input:{restaurantId:string;customerName:string;address:string;note:string;deliveryFee:number;items:Array<{id:string;name:string;price:number;quantity:number;note:string}>}) {
-  if (!supabase) throw new Error("Supabase is not configured");
-  const { data, error } = await supabase.rpc("create_marketplace_order", { p_restaurant_id:input.restaurantId,p_customer_name:input.customerName,p_address:input.address,p_note:input.note,p_delivery_fee:input.deliveryFee,p_items:input.items.map(i=>({menu_item_id:i.id,name:i.name,price:i.price,quantity:i.quantity,note:i.note})) });
+export async function createOrder(input: {
+  restaurantId: string;
+  address: string;
+  note: string;
+  items: Array<{ id: string; quantity: number; note: string }>;
+}) {
+  const client = requireClient();
+  const { data, error } = await client.rpc("create_order_with_gp", {
+    p_restaurant_id: input.restaurantId,
+    p_delivery_address: input.address,
+    p_customer_note: input.note,
+    p_items: input.items.map((item) => ({ menu_item_id: item.id, quantity: item.quantity, note: item.note })),
+  });
   if (error) throw error;
   return data as string;
 }
 
-export async function updateOrderStatus(dbId:string|undefined,status:string) {
-  if (!supabase || !dbId) return;
-  const { error } = await supabase.from("orders").update({ status:statusToDb[status] ?? status }).eq("id",dbId);
+export async function updateOrderStatus(dbId: string | undefined, status: OrderStatusDb) {
+  if (!dbId) return;
+  const client = requireClient();
+  const { error } = await client.rpc("update_order_status", { p_order_id: dbId, p_status: status });
   if (error) throw error;
 }
 
-export async function setMenuAvailability(id:string,isAvailable:boolean) {
-  if (!supabase) return;
-  const { error } = await supabase.from("menu_items").update({ is_available:isAvailable }).eq("id",id);
+export async function createMenu(input: {
+  restaurantId: string;
+  name: string;
+  description: string;
+  price: number;
+  imageUrl: string;
+  categoryId: string | null;
+}) {
+  const client = requireClient();
+  const { data, error } = await client
+    .from("menu_items")
+    .insert({
+      restaurant_id: input.restaurantId,
+      name: input.name,
+      description: input.description,
+      price: input.price,
+      image_url: input.imageUrl || null,
+      category_id: input.categoryId,
+      is_available: true,
+      is_deleted: false,
+    })
+    .select("*, categories(name)")
+    .single();
+  if (error) throw error;
+  return mapMenuItem(data);
+}
+
+export async function updateMenu(id: string, input: Partial<{ name: string; description: string; price: number; imageUrl: string; categoryId: string | null; isAvailable: boolean }>) {
+  const client = requireClient();
+  const payload: Record<string, unknown> = {};
+  if (input.name !== undefined) payload.name = input.name;
+  if (input.description !== undefined) payload.description = input.description;
+  if (input.price !== undefined) payload.price = input.price;
+  if (input.imageUrl !== undefined) payload.image_url = input.imageUrl || null;
+  if (input.categoryId !== undefined) payload.category_id = input.categoryId;
+  if (input.isAvailable !== undefined) payload.is_available = input.isAvailable;
+  const { data, error } = await client.from("menu_items").update(payload).eq("id", id).select("*, categories(name)").single();
+  if (error) throw error;
+  return mapMenuItem(data);
+}
+
+export async function deleteMenu(id: string) {
+  const client = requireClient();
+  const { error } = await client.from("menu_items").update({ is_deleted: true, is_available: false }).eq("id", id);
   if (error) throw error;
 }
 
-export async function createMenu(input:{restaurantId:string;name:string;price:number}) {
-  if (!supabase) return null;
-  const { data,error } = await supabase.from("menu_items").insert({ restaurant_id:input.restaurantId,name:input.name,price:input.price,description:"เมนูใหม่ของร้าน",is_available:true }).select().single();
-  if(error) throw error;
+export async function getProfiles() {
+  const client = requireClient();
+  const { data, error } = await client.from("profiles").select("id,name,phone,email,role,created_at").order("created_at", { ascending: false });
+  if (error) throw error;
+  return (data ?? []).map((row: any): ProfileRow => ({
+    id: row.id,
+    name: row.name || "ไม่มีชื่อ",
+    phone: row.phone,
+    email: row.email,
+    role: row.role,
+    createdAt: row.created_at,
+  }));
+}
+
+export async function getSellerReport(restaurantId?: string) {
+  const client = requireClient();
+  const { data, error } = await client.rpc("seller_sales_summary", { p_restaurant_id: restaurantId ?? null });
+  if (error) throw error;
+  return data;
+}
+
+export async function getAdminReport() {
+  const client = requireClient();
+  const { data, error } = await client.rpc("admin_sales_summary");
+  if (error) throw error;
   return data;
 }
