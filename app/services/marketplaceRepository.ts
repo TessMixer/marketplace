@@ -27,7 +27,6 @@ export type Restaurant = {
   status: RestaurantStatus;
   gpPercent: number;
   rating: number;
-  delivery: number;
   time: string;
   latitude: number | null;
   longitude: number | null;
@@ -56,12 +55,12 @@ export type Order = {
   dbId: string;
   orderNumber: number;
   customer: string;
+  customerPhone: string;
   restaurant: string;
   restaurantId: string;
   items: string;
   itemDetails: Array<{ name: string; quantity: number; note: string | null; unitPrice: number }>;
   foodTotal: number;
-  deliveryFee: number;
   gpPercent: number;
   gpAmount: number;
   net: number;
@@ -70,19 +69,7 @@ export type Order = {
   time: string;
   createdAt: string;
   note: string;
-  address: string;
-  deliveryLatitude: number | null;
-  deliveryLongitude: number | null;
-  restaurantLatitude: number | null;
-  restaurantLongitude: number | null;
-  deliveryDistanceKm: number | null;
-};
-
-export type DeliveryQuote = {
-  distanceKm: number | null;
-  deliveryFee: number;
-  restaurantHasLocation: boolean;
-  usesGps: boolean;
+  fulfillmentMethod: "pickup" | "shop_contact";
 };
 
 export type ProfileRow = {
@@ -118,7 +105,6 @@ function mapRestaurant(row: any): Restaurant {
     status: row.status,
     gpPercent: Number(row.gp_percent ?? 0),
     rating: Number(row.rating ?? 0),
-    delivery: Number(row.delivery_fee ?? 0),
     time: row.delivery_minutes ?? "20-30 นาที",
     latitude: row.latitude === null || row.latitude === undefined ? null : Number(row.latitude),
     longitude: row.longitude === null || row.longitude === undefined ? null : Number(row.longitude),
@@ -158,12 +144,12 @@ function mapOrder(row: any): Order {
     dbId: row.id,
     orderNumber: Number(row.order_number ?? 0),
     customer: row.customer_name ?? "ลูกค้า",
+    customerPhone: row.customer_phone ?? "",
     restaurant: row.restaurants?.name ?? "ร้านอาหาร",
     restaurantId: row.restaurant_id,
     items: itemDetails.map((item: { name: string; quantity: number }) => `${item.name} × ${item.quantity}`).join(", "),
     itemDetails,
     foodTotal: Number(row.food_total ?? 0),
-    deliveryFee: Number(row.delivery_fee ?? 0),
     gpPercent: Number(row.gp_percent ?? 0),
     gpAmount: Number(row.gp_amount ?? 0),
     net: Number(row.restaurant_net_income ?? 0),
@@ -172,12 +158,7 @@ function mapOrder(row: any): Order {
     time: new Date(row.created_at).toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" }),
     createdAt: row.created_at,
     note: row.customer_note ?? "",
-    address: row.delivery_address ?? row.address ?? "",
-    deliveryLatitude: row.delivery_latitude === null || row.delivery_latitude === undefined ? null : Number(row.delivery_latitude),
-    deliveryLongitude: row.delivery_longitude === null || row.delivery_longitude === undefined ? null : Number(row.delivery_longitude),
-    restaurantLatitude: row.restaurant_latitude === null || row.restaurant_latitude === undefined ? null : Number(row.restaurant_latitude),
-    restaurantLongitude: row.restaurant_longitude === null || row.restaurant_longitude === undefined ? null : Number(row.restaurant_longitude),
-    deliveryDistanceKm: row.delivery_distance_km === null || row.delivery_distance_km === undefined ? null : Number(row.delivery_distance_km),
+    fulfillmentMethod: row.fulfillment_method === "shop_contact" ? "shop_contact" : "pickup",
   };
 }
 
@@ -288,40 +269,23 @@ export async function getOrders() {
 
 export async function createOrder(input: {
   restaurantId: string;
-  address: string;
+  customerName: string;
+  customerPhone: string;
+  fulfillmentMethod: "pickup" | "shop_contact";
   note: string;
-  latitude: number | null;
-  longitude: number | null;
   items: Array<{ id: string; quantity: number; note: string }>;
 }) {
   const client = requireClient();
   const { data, error } = await client.rpc("create_order_with_gp", {
     p_restaurant_id: input.restaurantId,
-    p_delivery_address: input.address,
-    p_delivery_latitude: input.latitude,
-    p_delivery_longitude: input.longitude,
+    p_customer_name: input.customerName,
+    p_customer_phone: input.customerPhone,
+    p_fulfillment_method: input.fulfillmentMethod,
     p_customer_note: input.note,
     p_items: input.items.map((item) => ({ menu_item_id: item.id, quantity: item.quantity, note: item.note })),
   });
   if (error) throw error;
   return data as string;
-}
-
-export async function getDeliveryQuote(restaurantId: string, latitude: number | null, longitude: number | null): Promise<DeliveryQuote> {
-  const client = requireClient();
-  const { data, error } = await client.rpc("calculate_delivery_quote", {
-    p_restaurant_id: restaurantId,
-    p_delivery_latitude: latitude,
-    p_delivery_longitude: longitude,
-  });
-  if (error) throw error;
-  const row = data as Record<string, unknown>;
-  return {
-    distanceKm: row.distance_km === null || row.distance_km === undefined ? null : Number(row.distance_km),
-    deliveryFee: Number(row.delivery_fee ?? 20),
-    restaurantHasLocation: Boolean(row.restaurant_has_location),
-    usesGps: Boolean(row.uses_gps),
-  };
 }
 
 export async function updateOrderStatus(dbId: string | undefined, status: OrderStatusDb) {
