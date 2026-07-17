@@ -2,16 +2,18 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   BarChart3,
   Bell,
+  Camera,
   Check,
   ChevronRight,
   CircleDollarSign,
   Clock3,
   CookingPot,
+  Download,
   Home,
   LayoutDashboard,
   LogOut,
@@ -19,6 +21,7 @@ import {
   PackageCheck,
   Phone,
   Plus,
+  Printer,
   Search,
   Settings,
   ShieldCheck,
@@ -32,17 +35,21 @@ import {
   UserRound,
   Users,
   UtensilsCrossed,
+  Volume2,
+  VolumeX,
   WalletCards,
   X,
 } from "lucide-react";
 import AuthScreen from "../auth/AuthScreen";
-import { useAuth } from "../auth/AuthProvider";
+import { type Profile, useAuth } from "../auth/AuthProvider";
 import { categories as mockCategories, initialMenu, initialOrders, money, restaurants as mockRestaurants, Role } from "../data/mockData";
+import { compressFoodImage } from "../lib/imageUpload";
 import { isSupabaseConfigured } from "../lib/supabase";
 import {
   Category,
   createMenu,
   createOrder,
+  deleteFoodImage,
   deleteMenu,
   getAdminReport,
   getCatalog,
@@ -59,6 +66,7 @@ import {
   Restaurant,
   RestaurantStatus,
   subscribeToOrders,
+  uploadFoodImage,
   updateMenu,
   updateOrderStatus,
   updateRestaurantAdmin,
@@ -118,6 +126,11 @@ function thaiError(error: unknown, fallback: string) {
     ["items required", "กรุณาเลือกอาหารอย่างน้อย 1 รายการ"],
     ["profile not found", "ไม่พบข้อมูลผู้ใช้ กรุณาเข้าสู่ระบบใหม่"],
     ["restaurant is not available", "ร้านปิดหรือยังไม่ได้รับอนุมัติ"],
+    ["restaurant is outside opening hours", "ร้านอยู่นอกเวลาเปิดรับออเดอร์"],
+    ["restaurant has reached active order limit", "ร้านมีออเดอร์เต็มจำนวนแล้ว กรุณาลองใหม่ภายหลัง"],
+    ["pickup time is in the past", "เวลารับอาหารต้องไม่เป็นเวลาในอดีต"],
+    ["pickup time is too far ahead", "เลือกเวลารับอาหารล่วงหน้าได้ไม่เกิน 7 วัน"],
+    ["customer profile required", "บัญชีลูกค้าเท่านั้นที่สามารถสั่งอาหารได้"],
     ["menu item is not available", "มีเมนูที่ปิดขายแล้ว กรุณาเลือกใหม่"],
     ["invalid quantity", "จำนวนอาหารไม่ถูกต้อง"],
     ["quantity must be greater than zero", "จำนวนอาหารต้องมากกว่า 0"],
@@ -143,6 +156,7 @@ function toRestaurant(row: (typeof mockRestaurants)[number]): Restaurant {
     isOpen: row.isOpen,
     status: row.status as RestaurantStatus,
     gpPercent: row.gpPercent,
+    maxActiveOrders: 20,
     rating: row.rating,
     time: row.time,
     latitude: null,
@@ -191,7 +205,44 @@ function toOrder(row: (typeof initialOrders)[number]): Order {
     createdAt: new Date().toISOString(),
     note: row.note,
     fulfillmentMethod: "pickup",
+    requestedPickupTime: null,
   };
+}
+
+function pickupTimeText(value: string | null) {
+  if (!value) return "เร็วที่สุด";
+  return new Date(value).toLocaleString("th-TH", { dateStyle: "medium", timeStyle: "short" });
+}
+
+function downloadOrdersCsv(orders: Order[], filename: string) {
+  const escape = (value: unknown) => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const rows = [
+    ["ออเดอร์", "วันที่", "ร้าน", "ลูกค้า", "เบอร์โทร", "สถานะ", "เวลารับ", "ยอดอาหาร", "GP", "รายได้สุทธิ"],
+    ...orders.map((order) => [order.id, new Date(order.createdAt).toLocaleString("th-TH"), order.restaurant, order.customer, order.customerPhone, statusText[order.status], pickupTimeText(order.requestedPickupTime), order.foodTotal, order.gpAmount, order.net]),
+  ];
+  const blob = new Blob(["\uFEFF", rows.map((row) => row.map(escape).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function playOrderSound() {
+  const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextClass) return;
+  const context = new AudioContextClass();
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.frequency.setValueAtTime(880, context.currentTime);
+  gain.gain.setValueAtTime(0.001, context.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.22, context.currentTime + 0.02);
+  gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.55);
+  oscillator.connect(gain).connect(context.destination);
+  oscillator.start();
+  oscillator.stop(context.currentTime + 0.58);
+  window.setTimeout(() => void context.close(), 700);
 }
 
 const emptySellerSummary = {
@@ -209,7 +260,7 @@ const emptyAdminSummary = {
 };
 
 export default function MarketplaceApp() {
-  const { session, profile, profileError, loading: authLoading, configured, signOut, refreshProfile } = useAuth();
+  const { session, profile, profileError, loading: authLoading, configured, passwordRecovery, signOut, refreshProfile, updateAccount } = useAuth();
   const [screen, setScreen] = useState<Screen>("home");
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("ทั้งหมด");
@@ -225,6 +276,7 @@ export default function MarketplaceApp() {
   const [checkoutName, setCheckoutName] = useState("");
   const [checkoutPhone, setCheckoutPhone] = useState("");
   const [checkoutNote, setCheckoutNote] = useState("");
+  const [checkoutPickupTime, setCheckoutPickupTime] = useState("");
   const [fulfillmentMethod, setFulfillmentMethod] = useState<"pickup" | "shop_contact">("pickup");
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [lastOrderId, setLastOrderId] = useState<string | null>(null);
@@ -233,6 +285,8 @@ export default function MarketplaceApp() {
   const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "connected" | "offline">("connecting");
   const [sellerSummary, setSellerSummary] = useState(emptySellerSummary);
   const [adminSummary, setAdminSummary] = useState(emptyAdminSummary);
+  const [profileEditorOpen, setProfileEditorOpen] = useState(false);
+  const [sellerAlertsEnabled, setSellerAlertsEnabled] = useState(() => typeof window !== "undefined" && window.localStorage.getItem("imdee-seller-alerts") === "on");
   const realtimeRefreshTimer = useRef<number | null>(null);
 
   const role = profile?.role ?? "customer";
@@ -252,6 +306,38 @@ export default function MarketplaceApp() {
     setToast(message);
     window.setTimeout(() => setToast(""), 2400);
   }, []);
+
+  const notifySeller = useCallback((message: string) => {
+    if (!sellerAlertsEnabled) return;
+    playOrderSound();
+    if ("Notification" in window && Notification.permission === "granted") {
+      if ("serviceWorker" in navigator) {
+        void navigator.serviceWorker.ready.then((registration) => registration.showNotification("อิ่มดี · ออเดอร์ใหม่", { body: message, icon: "/favicon.svg", tag: "imdee-new-order" }));
+      } else new Notification("อิ่มดี · ออเดอร์ใหม่", { body: message, icon: "/favicon.svg", tag: "imdee-new-order" });
+    }
+  }, [sellerAlertsEnabled]);
+
+  const toggleSellerAlerts = useCallback(async () => {
+    if (sellerAlertsEnabled) {
+      setSellerAlertsEnabled(false);
+      window.localStorage.setItem("imdee-seller-alerts", "off");
+      flash("ปิดเสียงและการแจ้งเตือนแล้ว");
+      return;
+    }
+    if (!("Notification" in window)) {
+      flash("เบราว์เซอร์นี้ไม่รองรับการแจ้งเตือน");
+      return;
+    }
+    const permission = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+    if (permission !== "granted") {
+      flash("กรุณาอนุญาตการแจ้งเตือนในเบราว์เซอร์");
+      return;
+    }
+    setSellerAlertsEnabled(true);
+    window.localStorage.setItem("imdee-seller-alerts", "on");
+    playOrderSound();
+    flash("เปิดเสียงและการแจ้งเตือนออเดอร์ใหม่แล้ว");
+  }, [sellerAlertsEnabled, flash]);
 
   const loadSharedData = useCallback(async () => {
     if (!isSupabaseConfigured) return;
@@ -339,7 +425,10 @@ export default function MarketplaceApp() {
         if (realtimeRefreshTimer.current) window.clearTimeout(realtimeRefreshTimer.current);
         realtimeRefreshTimer.current = window.setTimeout(() => {
           void refreshRoleData();
-          if (profile.role === "seller" && event === "INSERT") flash("มีออเดอร์ใหม่ กรุณาตรวจสอบและกดรับออเดอร์");
+          if (profile.role === "seller" && event === "INSERT") {
+            flash("มีออเดอร์ใหม่ กรุณาตรวจสอบและกดรับออเดอร์");
+            notifySeller("มีออเดอร์ใหม่ กรุณาเปิดหน้าร้านเพื่อรับออเดอร์");
+          }
           else if (profile.role === "customer" && event === "UPDATE") flash("สถานะออเดอร์ของคุณอัปเดตแล้ว");
         }, 250);
       },
@@ -351,7 +440,20 @@ export default function MarketplaceApp() {
       unsubscribe();
       if (realtimeRefreshTimer.current) window.clearTimeout(realtimeRefreshTimer.current);
     };
-  }, [configured, session, profile, sellerRestaurant?.id, refreshRoleData, flash]);
+  }, [configured, session, profile, sellerRestaurant?.id, refreshRoleData, flash, notifySeller]);
+
+  const sellerPendingCount = role === "seller" ? orders.filter((order) => order.status === "pending").length : 0;
+  useEffect(() => {
+    if (!sellerAlertsEnabled || sellerPendingCount <= 0) return;
+    const reminder = window.setInterval(() => notifySeller(`ยังมี ${sellerPendingCount} ออเดอร์รอรับ`), 30000);
+    return () => window.clearInterval(reminder);
+  }, [sellerAlertsEnabled, sellerPendingCount, notifySeller]);
+
+  useEffect(() => {
+    if (!configured || !profile || role !== "customer") return;
+    const catalogRefresh = window.setInterval(() => void refreshRoleData(), 60000);
+    return () => window.clearInterval(catalogRefresh);
+  }, [configured, profile, role, refreshRoleData]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleRestaurants = restaurants.filter((shop) => {
@@ -399,10 +501,12 @@ export default function MarketplaceApp() {
         customerPhone: checkoutPhone,
         fulfillmentMethod,
         note: checkoutNote,
+        requestedPickupTime: checkoutPickupTime ? new Date(checkoutPickupTime).toISOString() : null,
         items: cart.map((item) => ({ id: item.id, quantity: item.quantity, note: item.note })),
       });
       setLastOrderId(orderId);
       setCart([]);
+      setCheckoutPickupTime("");
       await refreshRoleData();
       go("customer-orders");
       flash("สั่งอาหารสำเร็จ บันทึกลง Supabase แล้ว");
@@ -437,6 +541,7 @@ export default function MarketplaceApp() {
     );
   }
 
+  if (configured && passwordRecovery) return <AuthScreen />;
   if (configured && !session) return <AuthScreen />;
 
   if (configured && session && !profile) {
@@ -479,11 +584,11 @@ export default function MarketplaceApp() {
           <span>ตะกร้า</span>
           {cartCount > 0 && <b>{cartCount}</b>}
         </button>
-        <span className="user-role-chip">
+        <button className="user-role-chip" onClick={() => setProfileEditorOpen(true)}>
           <UserRound size={16} />
           {profile?.name || "โหมดทดลอง"}
           <small>{roleLabel(role)}</small>
-        </span>
+        </button>
         <button className="logout-button compact" onClick={signOut} aria-label="ออกจากระบบ">
           <LogOut size={18} />
         </button>
@@ -493,7 +598,7 @@ export default function MarketplaceApp() {
 
   return (
     <div className={role === "customer" ? "app customer-app" : "app dashboard-app"}>
-      {role === "customer" ? customerHeader : <DashboardSidebar role={role} screen={screen} go={go} signOut={signOut} profileName={profile?.name ?? ""} />}
+      {role === "customer" ? customerHeader : <DashboardSidebar role={role} screen={screen} go={go} signOut={signOut} profileName={profile?.name ?? ""} onProfile={() => setProfileEditorOpen(true)} />}
       <main className={role === "customer" ? "main" : "dashboard-main"}>
         {role === "customer" && screen === "home" && (
           <CustomerHome
@@ -538,6 +643,8 @@ export default function MarketplaceApp() {
             setFulfillmentMethod={setFulfillmentMethod}
             orderNote={checkoutNote}
             setOrderNote={setCheckoutNote}
+            pickupTime={checkoutPickupTime}
+            setPickupTime={setCheckoutPickupTime}
             busy={busyAction === "checkout"}
             updateQuantity={(id: string, amount: number) => setCart((current) => current.map((item) => (item.id === id ? { ...item, quantity: item.quantity + amount } : item)).filter((item) => item.quantity > 0))}
             removeItem={(id: string) => { setCart((current) => current.filter((item) => item.id !== id)); flash("ลบรายการออกจากตะกร้าแล้ว"); }}
@@ -548,7 +655,7 @@ export default function MarketplaceApp() {
         )}
         {role === "customer" && screen === "customer-orders" && <CustomerOrdersPage orders={customerOrders} back={() => go("home")} cancelOrder={changeOrderStatus} busyAction={busyAction} />}
 
-        {role === "seller" && screen === "seller" && <SellerDashboard restaurant={sellerRestaurant} orders={orders} summary={sellerSummary} go={go} updateOrder={changeOrderStatus} busyAction={busyAction} refresh={refreshRoleData} flash={flash} />}
+        {role === "seller" && screen === "seller" && <SellerDashboard restaurant={sellerRestaurant} orders={orders} summary={sellerSummary} go={go} updateOrder={changeOrderStatus} busyAction={busyAction} refresh={refreshRoleData} flash={flash} alertsEnabled={sellerAlertsEnabled} toggleAlerts={toggleSellerAlerts} />}
         {role === "seller" && screen === "seller-menu" && (
           <SellerMenu restaurant={sellerRestaurant} menu={menu.filter((item) => item.restaurantId === sellerRestaurant?.id && !item.isDeleted)} categories={categories} refresh={refreshRoleData} flash={flash} />
         )}
@@ -561,8 +668,9 @@ export default function MarketplaceApp() {
         {role === "admin" && screen === "admin-users" && <AdminUsers users={users} />}
         {role === "admin" && screen === "admin-orders" && <OrdersBoard orders={orders} updateOrder={changeOrderStatus} busyAction={busyAction} admin />}
         {role === "admin" && screen === "admin-gp" && <GpSettings shops={adminRestaurants} refresh={refreshRoleData} flash={flash} />}
-        {role === "admin" && screen === "admin-report" && <AdminReport summary={adminSummary} />}
+        {role === "admin" && screen === "admin-report" && <AdminReport summary={adminSummary} orders={orders} />}
       </main>
+      {profileEditorOpen && profile && <ProfileModal profile={profile} updateAccount={updateAccount} close={() => setProfileEditorOpen(false)} flash={flash} />}
       {role === "customer" && (
         <nav className="mobile-nav">
           <button className={screen === "home" || screen === "restaurant" ? "active" : ""} onClick={() => go("home")}>
@@ -580,6 +688,10 @@ export default function MarketplaceApp() {
           <button className={screen === "cart" ? "active" : ""} onClick={() => go("cart")}>
             <ShoppingCart size={21} />
             <span>ตะกร้า</span>
+          </button>
+          <button onClick={() => setProfileEditorOpen(true)}>
+            <UserRound size={21} />
+            <span>บัญชี</span>
           </button>
         </nav>
       )}
@@ -604,7 +716,7 @@ function DataBadge({ source, realtime }: { source: "loading" | "supabase" | "moc
   );
 }
 
-function DashboardSidebar({ role, screen, go, signOut, profileName }: { role: Role; screen: Screen; go: (screen: Screen) => void; signOut: () => void; profileName: string }) {
+function DashboardSidebar({ role, screen, go, signOut, profileName, onProfile }: { role: Role; screen: Screen; go: (screen: Screen) => void; signOut: () => void; profileName: string; onProfile: () => void }) {
   const nav =
     role === "seller"
       ? ([
@@ -641,10 +753,10 @@ function DashboardSidebar({ role, screen, go, signOut, profileName }: { role: Ro
       <div className="sidebar-bottom">
         <div className="user-card">
           <div className="avatar">{profileName?.[0] || "อ"}</div>
-          <span>
+          <button className="user-card-profile" onClick={onProfile}>
             <b>{profileName || "ผู้ใช้งาน"}</b>
             <small>{roleLabel(role)}</small>
-          </span>
+          </button>
           <button className="logout-button" onClick={signOut} aria-label="ออกจากระบบ">
             <LogOut size={18} />
           </button>
@@ -812,7 +924,12 @@ function RestaurantPage({ restaurant, categories, menu, activeCategory, setActiv
   );
 }
 
-function CartPage({ items, foodTotal, customerName, setCustomerName, customerPhone, setCustomerPhone, fulfillmentMethod, setFulfillmentMethod, orderNote, setOrderNote, busy, updateQuantity, removeItem, updateNote, back, checkout }: any) {
+function CartPage({ items, foodTotal, customerName, setCustomerName, customerPhone, setCustomerPhone, fulfillmentMethod, setFulfillmentMethod, orderNote, setOrderNote, pickupTime, setPickupTime, busy, updateQuantity, removeItem, updateNote, back, checkout }: any) {
+  const [pickupTimeMin] = useState(() => {
+    const minimum = new Date(Date.now() + 15 * 60 * 1000);
+    minimum.setMinutes(minimum.getMinutes() - minimum.getTimezoneOffset());
+    return minimum.toISOString().slice(0, 16);
+  });
   if (!items.length) {
     return (
       <section className="narrow-page">
@@ -890,6 +1007,11 @@ function CartPage({ items, foodTotal, customerName, setCustomerName, customerPho
             หมายเหตุ / รายละเอียดการรับอาหาร
             <textarea value={orderNote} onChange={(event) => setOrderNote(event.target.value)} placeholder="เช่น ไม่เผ็ด หรือโทรแจ้งก่อนอาหารพร้อม" />
           </label>
+          <label className="form-field">
+            เวลาที่ต้องการรับอาหาร
+            <input type="datetime-local" min={pickupTimeMin} value={pickupTime} onChange={(event) => setPickupTime(event.target.value)} />
+            <small>ไม่เลือก = รับเร็วที่สุดเมื่อร้านทำเสร็จ</small>
+          </label>
           <div className="summary-lines">
             <span>
               ยอดอาหาร <b>{money(foodTotal)}</b>
@@ -936,6 +1058,7 @@ function CustomerOrdersPage({ orders, back, cancelOrder, busyAction }: { orders:
           })}
           <div className="tracking-summary">
             <span>วิธีรับอาหาร <b>{order.fulfillmentMethod === "pickup" ? "รับเองที่ร้าน" : "ให้ร้านติดต่อกลับ"}</b></span>
+            <span>เวลาที่ต้องการรับ <b>{pickupTimeText(order.requestedPickupTime)}</b></span>
             <span>ชื่อผู้สั่ง <b>{order.customer}</b></span>
             <span>เบอร์โทร <b>{order.customerPhone || "ไม่ระบุ"}</b></span>
             <span>ยอดรวม <b>{money(order.total)}</b></span>
@@ -986,7 +1109,7 @@ function RestaurantNotice({ restaurant }: { restaurant: Restaurant | null }) {
   return <div className="status-alert success">ร้านอนุมัติแล้ว ลูกค้าสามารถเห็นร้านและสั่งอาหารได้</div>;
 }
 
-function SellerDashboard({ restaurant, orders, summary, go, updateOrder, busyAction, refresh, flash }: any) {
+function SellerDashboard({ restaurant, orders, summary, go, updateOrder, busyAction, refresh, flash, alertsEnabled, toggleAlerts }: any) {
   const pending = orders.find((order: Order) => order.status === "pending");
   const pendingCount = orders.filter((order: Order) => order.status === "pending").length;
   const preparingCount = orders.filter((order: Order) => order.status === "accepted" || order.status === "preparing").length;
@@ -1007,6 +1130,10 @@ function SellerDashboard({ restaurant, orders, summary, go, updateOrder, busyAct
     <>
       <DashboardTop title="ภาพรวมร้านค้า" subtitle={restaurant?.name ?? "ร้านของคุณ"} />
       <RestaurantNotice restaurant={restaurant} />
+      <button className={`notification-toggle ${alertsEnabled ? "active" : ""}`} onClick={toggleAlerts}>
+        {alertsEnabled ? <Volume2 size={21} /> : <VolumeX size={21} />}
+        <span><b>{alertsEnabled ? "เปิดเสียงและแจ้งเตือนแล้ว" : "เปิดเสียงแจ้งเตือนออเดอร์"}</b><small>{alertsEnabled ? "ระบบจะเตือนซ้ำทุก 30 วินาทีจนกว่าจะรับหรือปฏิเสธ" : "กดเพื่ออนุญาต Browser Notification"}</small></span>
+      </button>
       <div className="stats-grid seller-stats">
         <StatCard label="ออเดอร์ใหม่" value={`${pendingCount}`} change="รอร้านรับออเดอร์" icon={Bell} tone="orange" />
         <StatCard label="กำลังทำ" value={`${preparingCount}`} change="รับแล้วหรือกำลังเตรียม" icon={CookingPot} tone="blue" />
@@ -1033,6 +1160,7 @@ function SellerDashboard({ restaurant, orders, summary, go, updateOrder, busyAct
               <h3>{pending.items}</h3>
               <p>{pending.note || "ไม่มีหมายเหตุ"}</p>
               <span>{pending.customerPhone || "ไม่ระบุเบอร์โทร"} · {pending.fulfillmentMethod === "pickup" ? "รับเองที่ร้าน" : "ให้ร้านติดต่อกลับ"}</span>
+              <span>เวลารับ: {pickupTimeText(pending.requestedPickupTime)}</span>
             </div>
             <div className="order-total">
               <small>ยอดรวม</small>
@@ -1141,7 +1269,7 @@ function SellerMenu({ restaurant, menu, categories, refresh, flash }: { restaura
                   if (!window.confirm(`ลบเมนู “${item.name}” ใช่หรือไม่?`)) return;
                   setBusyId(item.id);
                   try {
-                    await deleteMenu(item.id);
+                    await deleteMenu(item.id, item.image);
                     await refresh();
                     flash("ลบเมนูแล้ว");
                   } catch (error) {
@@ -1166,6 +1294,7 @@ function MenuModal({ restaurant, categories, item, onClose, refresh, flash }: an
   const [description, setDescription] = useState(item?.description ?? "");
   const [price, setPrice] = useState(String(item?.price ?? ""));
   const [imageUrl, setImageUrl] = useState(item?.image ?? "");
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [categoryId, setCategoryId] = useState(item?.categoryId ?? categories[0]?.id ?? "");
   const [busy, setBusy] = useState(false);
 
@@ -1174,8 +1303,16 @@ function MenuModal({ restaurant, categories, item, onClose, refresh, flash }: an
     if (!restaurant || busy) return;
     setBusy(true);
     try {
-      if (item) await updateMenu(item.id, { name, description, price: Number(price), imageUrl, categoryId });
-      else await createMenu({ restaurantId: restaurant.id, name, description, price: Number(price), imageUrl, categoryId });
+      let nextImageUrl = imageUrl;
+      if (imageFile) {
+        if (!restaurant.ownerId) throw new Error("ไม่พบเจ้าของร้านสำหรับอัปโหลดรูป");
+        const blob = await compressFoodImage(imageFile, 1200);
+        nextImageUrl = await uploadFoodImage({ blob, ownerId: restaurant.ownerId, restaurantId: restaurant.id, kind: "menu" });
+        setImageUrl(nextImageUrl);
+      }
+      if (item) await updateMenu(item.id, { name, description, price: Number(price), imageUrl: nextImageUrl, categoryId });
+      else await createMenu({ restaurantId: restaurant.id, name, description, price: Number(price), imageUrl: nextImageUrl, categoryId });
+      if (imageFile && item?.image) await deleteFoodImage(item.image);
       await refresh();
       flash(item ? "แก้ไขเมนูแล้ว" : "เพิ่มเมนูลง Supabase แล้ว");
       onClose();
@@ -1214,10 +1351,7 @@ function MenuModal({ restaurant, categories, item, onClose, refresh, flash }: an
             ))}
           </select>
         </label>
-        <label>
-          รูปภาพ URL
-          <input value={imageUrl} onChange={(event) => setImageUrl(event.target.value)} placeholder="https://..." />
-        </label>
+        <ImagePicker label="รูปเมนู" value={imageUrl} file={imageFile} onFile={setImageFile} />
         <button className="primary-button" type="submit" disabled={busy}>
           {busy ? "กำลังบันทึก..." : "บันทึกเมนู"}
         </button>
@@ -1228,6 +1362,7 @@ function MenuModal({ restaurant, categories, item, onClose, refresh, flash }: an
 
 function OrdersBoard({ orders, updateOrder, busyAction, admin = false }: { orders: Order[]; updateOrder: (order: Order, status: OrderStatusDb) => Promise<void>; busyAction: string | null; admin?: boolean }) {
   const [filter, setFilter] = useState<OrderStatusDb | "all">("all");
+  const [receipt, setReceipt] = useState<Order | null>(null);
   const nextStatus = (status: OrderStatusDb): OrderStatusDb | null => {
     if (status === "pending") return "accepted";
     if (status === "accepted") return "preparing";
@@ -1268,6 +1403,7 @@ function OrdersBoard({ orders, updateOrder, busyAction, admin = false }: { order
                   <b>{order.customer}</b>
                   <small>{order.customerPhone || "ไม่ระบุเบอร์โทร"}</small>
                   <small>{order.fulfillmentMethod === "pickup" ? "รับเองที่ร้าน" : "ให้ร้านติดต่อกลับ / ร้านจัดการเอง"}</small>
+                  <small>เวลารับ: {pickupTimeText(order.requestedPickupTime)}</small>
                 </span>
               </div>
               <div className="order-items">
@@ -1281,6 +1417,7 @@ function OrdersBoard({ orders, updateOrder, busyAction, admin = false }: { order
                 <span>ลูกค้าจ่าย <b>{money(order.total)}</b></span>
               </div>
               <footer>
+                <button className="receipt-button" onClick={() => setReceipt(order)}><Printer size={16} /> พิมพ์ใบออเดอร์</button>
                 {order.status === "pending" && (
                   <button className="reject" disabled={busyAction === `order-${order.dbId}`} onClick={() => updateOrder(order, "rejected")}>
                     {busyAction === `order-${order.dbId}` ? "กำลังบันทึก..." : "ปฏิเสธ"}
@@ -1297,8 +1434,22 @@ function OrdersBoard({ orders, updateOrder, busyAction, admin = false }: { order
         })}
       </div>
       {!orders.length && <EmptyState title="ยังไม่มีออเดอร์" text="เมื่อมีลูกค้าสั่งอาหาร ออเดอร์จะแสดงที่นี่" />}
+      {receipt && <OrderReceipt order={receipt} close={() => setReceipt(null)} />}
     </>
   );
+}
+
+function OrderReceipt({ order, close }: { order: Order; close: () => void }) {
+  return <div className="modal-backdrop receipt-modal"><div className="modal print-receipt">
+    <button className="close no-print" onClick={close}><X /></button>
+    <div className="receipt-brand"><IconLogo /><div><h2>อิ่มดี</h2><small>ใบออเดอร์สำหรับร้านค้า</small></div></div>
+    <div className="receipt-number"><span>เลขออเดอร์</span><strong>{order.id}</strong><small>{new Date(order.createdAt).toLocaleString("th-TH")}</small></div>
+    <div className="receipt-info"><p><b>ร้าน:</b> {order.restaurant}</p><p><b>ลูกค้า:</b> {order.customer}</p><p><b>โทร:</b> {order.customerPhone || "ไม่ระบุ"}</p><p><b>วิธีรับ:</b> {order.fulfillmentMethod === "pickup" ? "รับเองที่ร้าน" : "ร้านติดต่อกลับ"}</p><p><b>เวลารับ:</b> {pickupTimeText(order.requestedPickupTime)}</p></div>
+    <div className="receipt-items">{order.itemDetails.length ? order.itemDetails.map((item, index) => <div key={`${item.name}-${index}`}><span><b>{item.quantity} × {item.name}</b>{item.note && <small>หมายเหตุ: {item.note}</small>}</span><strong>{money(item.unitPrice * item.quantity)}</strong></div>) : <p>{order.items}</p>}</div>
+    {order.note && <div className="receipt-note"><b>หมายเหตุถึงร้าน:</b> {order.note}</div>}
+    <div className="receipt-total"><span>รวมทั้งหมด</span><strong>{money(order.total)}</strong></div>
+    <button className="primary-button no-print" onClick={() => window.print()}><Printer size={18} /> พิมพ์ใบออเดอร์</button>
+  </div></div>;
 }
 
 function SellerReport({ summary, orders }: { summary: typeof emptySellerSummary; orders: Order[] }) {
@@ -1306,6 +1457,7 @@ function SellerReport({ summary, orders }: { summary: typeof emptySellerSummary;
   return (
     <>
       <DashboardTop title="รายงานยอดขาย" subtitle="นับเฉพาะออเดอร์สถานะสำเร็จ" />
+      <div className="report-actions"><button className="ghost-button" onClick={() => downloadOrdersCsv(completed, `imdee-seller-${new Date().toISOString().slice(0,10)}.csv`)}><Download size={17} /> ดาวน์โหลด CSV</button></div>
       <div className="stats-grid">
         <StatCard label="ยอดขายวันนี้" value={money(Number(summary.today?.food_total ?? 0))} change={`${summary.today?.orders ?? 0} ออเดอร์`} icon={WalletCards} />
         <StatCard label="ค่า GP วันนี้" value={money(Number(summary.today?.gp_amount ?? 0))} change="หักจากยอดอาหาร" icon={CircleDollarSign} tone="purple" />
@@ -1335,8 +1487,10 @@ function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant |
     openTime: restaurant?.openTime ?? "08:00",
     closeTime: restaurant?.closeTime ?? "20:00",
     image: restaurant?.image ?? "",
+    maxActiveOrders: restaurant?.maxActiveOrders ?? 20,
     isOpen: restaurant?.isOpen ?? false,
   }));
+  const [imageFile, setImageFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -1349,20 +1503,28 @@ function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant |
         openTime: restaurant?.openTime ?? "08:00",
         closeTime: restaurant?.closeTime ?? "20:00",
         image: restaurant?.image ?? "",
+        maxActiveOrders: restaurant?.maxActiveOrders ?? 20,
         isOpen: restaurant?.isOpen ?? false,
       });
     }, 0);
     return () => window.clearTimeout(syncTimer);
   }, [restaurant]);
 
-  const update = (key: keyof typeof form, value: string | boolean) => setForm((current) => ({ ...current, [key]: value }));
+  const update = (key: keyof typeof form, value: string | boolean | number) => setForm((current) => ({ ...current, [key]: value }));
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     if (!restaurant || busy) return;
     setBusy(true);
     try {
-      await updateSellerRestaurant(restaurant.id, form);
+      let nextImage = form.image;
+      if (imageFile) {
+        if (!restaurant.ownerId) throw new Error("ไม่พบเจ้าของร้านสำหรับอัปโหลดรูป");
+        const blob = await compressFoodImage(imageFile, 1600);
+        nextImage = await uploadFoodImage({ blob, ownerId: restaurant.ownerId, restaurantId: restaurant.id, kind: "restaurant" });
+      }
+      await updateSellerRestaurant(restaurant.id, { ...form, image: nextImage });
+      if (imageFile) await deleteFoodImage(restaurant.image);
       await refresh();
       flash("บันทึกข้อมูลร้านแล้ว");
     } catch (error) {
@@ -1376,9 +1538,7 @@ function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant |
       <RestaurantNotice restaurant={restaurant} />
       {restaurant && (
         <form className="settings-form" onSubmit={submit}>
-          <div className="shop-cover">
-            <img src={form.image} alt={form.name} />
-          </div>
+          <ImagePicker label="รูปร้าน" value={form.image} file={imageFile} onFile={setImageFile} large />
           <div className="form-grid">
             <label>
               ชื่อร้าน
@@ -1400,15 +1560,17 @@ function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant |
               เวลาปิด
               <input type="time" value={form.closeTime} onChange={(event) => update("closeTime", event.target.value)} />
             </label>
+            <label>
+              จำนวนออเดอร์พร้อมกันสูงสุด
+              <input type="number" min="1" max="100" value={form.maxActiveOrders} onChange={(event) => update("maxActiveOrders", Number(event.target.value))} />
+              <small>ระบบจะหยุดรับออเดอร์ใหม่เมื่อถึงจำนวนนี้</small>
+            </label>
             <label className="full">
               ที่อยู่
               <textarea value={form.address} onChange={(event) => update("address", event.target.value)} />
             </label>
-            <label className="full">
-              รูปร้าน URL
-              <input value={form.image} onChange={(event) => update("image", event.target.value)} />
-            </label>
           </div>
+          <div className="opening-hours-note"><Clock3 size={18} /> ระบบเปิดรับออเดอร์อัตโนมัติเฉพาะช่วง {form.openTime}–{form.closeTime} น. และเมื่อเปิดสวิตช์ร้าน</div>
           <label className="toggle-line">
             <input type="checkbox" checked={form.isOpen} onChange={(event) => update("isOpen", event.target.checked)} />
             เปิดร้านรับออเดอร์
@@ -1418,6 +1580,44 @@ function ShopSettings({ restaurant, refresh, flash }: { restaurant: Restaurant |
       )}
     </>
   );
+}
+
+function ImagePicker({ label, value, file, onFile, large = false }: { label: string; value: string; file: File | null; onFile: (file: File | null) => void; large?: boolean }) {
+  const preview = useMemo(() => file ? URL.createObjectURL(file) : value, [file, value]);
+  useEffect(() => () => { if (file) URL.revokeObjectURL(preview); }, [file, preview]);
+  return (
+    <label className={`image-picker ${large ? "large" : ""}`}>
+      {preview ? <img src={preview} alt={`ตัวอย่าง${label}`} /> : <span><Camera size={30} />ยังไม่มีรูป</span>}
+      <div><Camera size={18} /><b>{label}</b><small>แตะเพื่อถ่ายหรือเลือกรูป JPG, PNG, WebP ไม่เกิน 10 MB</small></div>
+      <input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => onFile(event.target.files?.[0] ?? null)} />
+    </label>
+  );
+}
+
+function ProfileModal({ profile, updateAccount, close, flash }: { profile: Profile; updateAccount: (input: { name: string; phone: string; email: string }) => Promise<{ emailConfirmationRequired: boolean }>; close: () => void; flash: (message: string) => void }) {
+  const [name, setName] = useState(profile.name ?? "");
+  const [phone, setPhone] = useState(profile.phone ?? "");
+  const [email, setEmail] = useState(profile.email ?? "");
+  const [busy, setBusy] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const result = await updateAccount({ name, phone, email });
+      flash(result.emailConfirmationRequired ? "บันทึกแล้ว กรุณายืนยันอีเมลใหม่จากกล่องข้อความ" : "บันทึกข้อมูลบัญชีแล้ว");
+      close();
+    } catch (error) { flash(thaiError(error, "บันทึกข้อมูลบัญชีไม่สำเร็จ")); }
+    finally { setBusy(false); }
+  };
+  return <div className="modal-backdrop"><form className="modal profile-modal" onSubmit={submit}>
+    <button type="button" className="close" onClick={close} disabled={busy}><X /></button>
+    <span className="kicker">บัญชีผู้ใช้</span><h2>แก้ไขโปรไฟล์</h2>
+    <label>ชื่อ-นามสกุล<input required value={name} onChange={(event) => setName(event.target.value)} /></label>
+    <label>เบอร์โทร<input required type="tel" value={phone} onChange={(event) => setPhone(event.target.value)} /></label>
+    <label>อีเมล<input required type="email" value={email} onChange={(event) => setEmail(event.target.value)} /><small>หากเปลี่ยนอีเมล ระบบจะส่งลิงก์ยืนยันไปยังอีเมลใหม่</small></label>
+    <button className="primary-button" disabled={busy}>{busy ? "กำลังบันทึก..." : "บันทึกข้อมูลบัญชี"}</button>
+  </form></div>;
 }
 
 function AdminDashboard({ summary, shops, orders, go }: any) {
@@ -1668,12 +1868,13 @@ function GpSettings({ shops, refresh, flash }: { shops: Restaurant[]; refresh: (
   );
 }
 
-function AdminReport({ summary }: { summary: typeof emptyAdminSummary }) {
+function AdminReport({ summary, orders }: { summary: typeof emptyAdminSummary; orders: Order[] }) {
   const [period, setPeriod] = useState<"today" | "month">("today");
   const selected = summary[period] ?? summary.today;
   return (
     <>
       <DashboardTop title="รายงานระบบ" subtitle="ยอดขายรวม GP รวม ร้านขายดี และเมนูขายดี" />
+      <div className="report-actions"><button className="ghost-button" onClick={() => downloadOrdersCsv(orders, `imdee-admin-${new Date().toISOString().slice(0,10)}.csv`)}><Download size={17} /> ดาวน์โหลดออเดอร์ CSV</button></div>
       <div className="filter-tabs">
         <button className={period === "today" ? "active" : ""} onClick={() => setPeriod("today")}>วันนี้</button>
         <button className={period === "month" ? "active" : ""} onClick={() => setPeriod("month")}>เดือนนี้</button>

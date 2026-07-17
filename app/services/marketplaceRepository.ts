@@ -26,6 +26,7 @@ export type Restaurant = {
   isOpen: boolean;
   status: RestaurantStatus;
   gpPercent: number;
+  maxActiveOrders: number;
   rating: number;
   time: string;
   latitude: number | null;
@@ -70,6 +71,7 @@ export type Order = {
   createdAt: string;
   note: string;
   fulfillmentMethod: "pickup" | "shop_contact";
+  requestedPickupTime: string | null;
 };
 
 export type ProfileRow = {
@@ -104,6 +106,7 @@ function mapRestaurant(row: any): Restaurant {
     isOpen: Boolean(row.is_open),
     status: row.status,
     gpPercent: Number(row.gp_percent ?? 0),
+    maxActiveOrders: Number(row.max_active_orders ?? 20),
     rating: Number(row.rating ?? 0),
     time: row.delivery_minutes ?? "20-30 นาที",
     latitude: row.latitude === null || row.latitude === undefined ? null : Number(row.latitude),
@@ -159,7 +162,29 @@ function mapOrder(row: any): Order {
     createdAt: row.created_at,
     note: row.customer_note ?? "",
     fulfillmentMethod: row.fulfillment_method === "shop_contact" ? "shop_contact" : "pickup",
+    requestedPickupTime: row.requested_pickup_time ?? null,
   };
+}
+
+function isWithinOpeningHours(restaurant: Restaurant) {
+  if (!restaurant.isOpen) return false;
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Bangkok",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date());
+  const hour = Number(parts.find((part) => part.type === "hour")?.value ?? 0);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value ?? 0);
+  const now = hour * 60 + minute;
+  const toMinutes = (time: string) => {
+    const [hours, minutes] = time.split(":").map(Number);
+    return hours * 60 + minutes;
+  };
+  const open = toMinutes(restaurant.openTime);
+  const close = toMinutes(restaurant.closeTime);
+  if (open === close) return true;
+  return open < close ? now >= open && now < close : now >= open || now < close;
 }
 
 export async function getCategories() {
@@ -183,7 +208,7 @@ export async function getCatalog() {
   if (restaurantError) throw restaurantError;
   if (menuError) throw menuError;
   return {
-    restaurants: (restaurantRows ?? []).map(mapRestaurant),
+    restaurants: (restaurantRows ?? []).map(mapRestaurant).filter(isWithinOpeningHours),
     menu: (menuRows ?? []).map(mapMenuItem),
   };
 }
@@ -237,7 +262,7 @@ export async function updateRestaurantAdmin(id: string, input: Partial<{ status:
   if (error) throw error;
 }
 
-export async function updateSellerRestaurant(id: string, input: Partial<Pick<Restaurant, "name" | "description" | "phone" | "address" | "openTime" | "closeTime" | "isOpen" | "image" | "latitude" | "longitude" | "locationAddress">>) {
+export async function updateSellerRestaurant(id: string, input: Partial<Pick<Restaurant, "name" | "description" | "phone" | "address" | "openTime" | "closeTime" | "isOpen" | "image" | "maxActiveOrders" | "latitude" | "longitude" | "locationAddress">>) {
   const client = requireClient();
   const payload: Record<string, unknown> = {};
   if (input.name !== undefined) payload.name = input.name;
@@ -248,6 +273,7 @@ export async function updateSellerRestaurant(id: string, input: Partial<Pick<Res
   if (input.closeTime !== undefined) payload.close_time = input.closeTime;
   if (input.isOpen !== undefined) payload.is_open = input.isOpen;
   if (input.image !== undefined) payload.image_url = input.image;
+  if (input.maxActiveOrders !== undefined) payload.max_active_orders = input.maxActiveOrders;
   if (input.latitude !== undefined) payload.latitude = input.latitude;
   if (input.longitude !== undefined) payload.longitude = input.longitude;
   if (input.locationAddress !== undefined) payload.location_address = input.locationAddress;
@@ -314,6 +340,7 @@ export async function createOrder(input: {
   customerPhone: string;
   fulfillmentMethod: "pickup" | "shop_contact";
   note: string;
+  requestedPickupTime: string | null;
   items: Array<{ id: string; quantity: number; note: string }>;
 }) {
   const client = requireClient();
@@ -323,10 +350,44 @@ export async function createOrder(input: {
     p_customer_phone: input.customerPhone,
     p_fulfillment_method: input.fulfillmentMethod,
     p_customer_note: input.note,
+    p_requested_pickup_time: input.requestedPickupTime,
     p_items: input.items.map((item) => ({ menu_item_id: item.id, quantity: item.quantity, note: item.note })),
   });
   if (error) throw error;
   return data as string;
+}
+
+const foodImagesPublicMarker = "/storage/v1/object/public/food-images/";
+
+function storagePathFromPublicUrl(url: string) {
+  const markerIndex = url.indexOf(foodImagesPublicMarker);
+  return markerIndex >= 0 ? decodeURIComponent(url.slice(markerIndex + foodImagesPublicMarker.length)) : null;
+}
+
+export async function uploadFoodImage(input: {
+  blob: Blob;
+  ownerId: string;
+  restaurantId: string;
+  kind: "restaurant" | "menu";
+}) {
+  const client = requireClient();
+  const path = `${input.ownerId}/${input.restaurantId}/${input.kind}/${crypto.randomUUID()}.webp`;
+  const { error } = await client.storage.from("food-images").upload(path, input.blob, {
+    contentType: "image/webp",
+    cacheControl: "31536000",
+    upsert: false,
+  });
+  if (error) throw error;
+  const { data } = client.storage.from("food-images").getPublicUrl(path);
+  return data.publicUrl;
+}
+
+export async function deleteFoodImage(publicUrl?: string) {
+  if (!publicUrl) return;
+  const path = storagePathFromPublicUrl(publicUrl);
+  if (!path) return;
+  const client = requireClient();
+  await client.storage.from("food-images").remove([path]);
 }
 
 export async function updateOrderStatus(dbId: string | undefined, status: OrderStatusDb) {
@@ -377,10 +438,11 @@ export async function updateMenu(id: string, input: Partial<{ name: string; desc
   return mapMenuItem(data);
 }
 
-export async function deleteMenu(id: string) {
+export async function deleteMenu(id: string, imageUrl?: string) {
   const client = requireClient();
   const { error } = await client.from("menu_items").update({ is_deleted: true, is_available: false }).eq("id", id);
   if (error) throw error;
+  await deleteFoodImage(imageUrl);
 }
 
 export async function getProfiles() {
