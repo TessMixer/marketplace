@@ -267,6 +267,47 @@ export async function getOrders() {
   return (data ?? []).map(mapOrder);
 }
 
+export type OrderRealtimeStatus = "connecting" | "connected" | "offline";
+
+export function subscribeToOrders(input: {
+  role: Role;
+  profileId: string;
+  restaurantId?: string | null;
+  onChange: (event: "INSERT" | "UPDATE" | "DELETE") => void;
+  onStatus?: (status: OrderRealtimeStatus) => void;
+}) {
+  if (!supabase) return () => undefined;
+  if (input.role === "seller" && !input.restaurantId) return () => undefined;
+
+  const filter = input.role === "customer"
+    ? `customer_id=eq.${input.profileId}`
+    : input.role === "seller"
+      ? `restaurant_id=eq.${input.restaurantId}`
+      : undefined;
+  const channelName = `orders:${input.role}:${input.restaurantId ?? input.profileId}`;
+  const channel = supabase
+    .channel(channelName)
+    .on(
+      "postgres_changes",
+      {
+        event: "*",
+        schema: "public",
+        table: "orders",
+        ...(filter ? { filter } : {}),
+      },
+      (payload) => input.onChange(payload.eventType as "INSERT" | "UPDATE" | "DELETE"),
+    )
+    .subscribe((status) => {
+      if (status === "SUBSCRIBED") input.onStatus?.("connected");
+      else if (status === "CHANNEL_ERROR" || status === "TIMED_OUT" || status === "CLOSED") input.onStatus?.("offline");
+      else input.onStatus?.("connecting");
+    });
+
+  return () => {
+    void supabase?.removeChannel(channel);
+  };
+}
+
 export async function createOrder(input: {
   restaurantId: string;
   customerName: string;

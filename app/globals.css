@@ -19,6 +19,8 @@ img { display:block; object-fit:cover; }
 .data-badge i { width:7px;height:7px;border-radius:50%;background:#10b981; }
 .data-badge.loading { color:#92400e;background:#fffbeb;border-color:#fde68a; }.data-badge.loading i { background:#f59e0b;animation:pulse 1s infinite; }
 .data-badge.mock { color:#6b7280;background:#f9fafb;border-color:#e5e7eb; }.data-badge.mock i { background:#9ca3af; }
+.data-badge.supabase.connecting { color:#92400e;background:#fffbeb;border-color:#fde68a; }.data-badge.supabase.connecting i { background:#f59e0b;animation:pulse 1s infinite; }
+.data-badge.supabase.offline { color:#4b5563;background:#f9fafb;border-color:#e5e7eb; }.data-badge.supabase.offline i { background:#9ca3af; }
 .user-role-chip { min-height:43px;display:grid;grid-template-columns:auto auto;align-items:center;gap:0 7px;border:1px solid var(--line);border-radius:13px;padding:5px 10px;color:var(--ink);font-size:11px;font-weight:800; }
 .user-role-chip svg { grid-row:1/3;color:var(--primary); }.user-role-chip small { color:var(--muted);font-size:9px;font-weight:500; }
 .logout-button { width:37px;height:37px;border:1px solid #374151;background:#202a39;color:#d1d5db;border-radius:10px;display:grid;place-items:center; }

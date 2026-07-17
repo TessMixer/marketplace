@@ -2,7 +2,7 @@
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
   BarChart3,
@@ -58,6 +58,7 @@ import {
   ProfileRow,
   Restaurant,
   RestaurantStatus,
+  subscribeToOrders,
   updateMenu,
   updateOrderStatus,
   updateRestaurantAdmin,
@@ -229,8 +230,10 @@ export default function MarketplaceApp() {
   const [lastOrderId, setLastOrderId] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const [dataSource, setDataSource] = useState<"loading" | "supabase" | "mock">(isSupabaseConfigured ? "loading" : "mock");
+  const [realtimeStatus, setRealtimeStatus] = useState<"connecting" | "connected" | "offline">("connecting");
   const [sellerSummary, setSellerSummary] = useState(emptySellerSummary);
   const [adminSummary, setAdminSummary] = useState(emptyAdminSummary);
+  const realtimeRefreshTimer = useRef<number | null>(null);
 
   const role = profile?.role ?? "customer";
 
@@ -245,12 +248,12 @@ export default function MarketplaceApp() {
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
 
-  const flash = (message: string) => {
+  const flash = useCallback((message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(""), 2400);
-  };
+  }, []);
 
-  const loadSharedData = async () => {
+  const loadSharedData = useCallback(async () => {
     if (!isSupabaseConfigured) return;
     const [categoryRows, catalog, orderRows] = await Promise.all([getCategories(), getCatalog(), getOrders()]);
     setCategories(categoryRows);
@@ -259,9 +262,9 @@ export default function MarketplaceApp() {
     setOrders(orderRows);
     setSelectedRestaurant((current) => catalog.restaurants.find((shop) => shop.id === current?.id) ?? catalog.restaurants[0] ?? null);
     setDataSource("supabase");
-  };
+  }, []);
 
-  const loadSellerData = async () => {
+  const loadSellerData = useCallback(async () => {
     if (!profile) return;
     const [workspace, orderRows] = await Promise.all([getSellerWorkspace(profile.id), getOrders()]);
     setSellerRestaurant(workspace.restaurant);
@@ -273,16 +276,16 @@ export default function MarketplaceApp() {
     }
     setOrders(orderRows);
     setDataSource("supabase");
-  };
+  }, [profile]);
 
-  const loadAdminData = async () => {
+  const loadAdminData = useCallback(async () => {
     const [shopRows, orderRows, profileRows, report] = await Promise.all([listAdminRestaurants(), getOrders(), getProfiles(), getAdminReport()]);
     setAdminRestaurants(shopRows);
     setOrders(orderRows);
     setUsers(profileRows);
     setAdminSummary(report);
     setDataSource("supabase");
-  };
+  }, []);
 
   useEffect(() => {
     if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => undefined);
@@ -295,7 +298,7 @@ export default function MarketplaceApp() {
     const loader = profile.role === "admin" ? loadAdminData : profile.role === "seller" ? loadSellerData : loadSharedData;
     loader().catch(() => setDataSource("mock"));
     return () => window.clearTimeout(redirectTimer);
-  }, [configured, session, profile]);
+  }, [configured, session, profile, loadAdminData, loadSellerData, loadSharedData]);
 
   useEffect(() => {
     if (!profile) return;
@@ -306,7 +309,7 @@ export default function MarketplaceApp() {
     return () => window.clearTimeout(syncTimer);
   }, [profile]);
 
-  const refreshRoleData = async () => {
+  const refreshRoleData = useCallback(async () => {
     try {
       if (role === "admin") await loadAdminData();
       else if (role === "seller") await loadSellerData();
@@ -315,7 +318,40 @@ export default function MarketplaceApp() {
       setDataSource("mock");
       flash("เชื่อมต่อ Supabase ไม่สำเร็จ ใช้ข้อมูลตัวอย่างชั่วคราว");
     }
-  };
+  }, [role, loadAdminData, loadSellerData, loadSharedData, flash]);
+
+  useEffect(() => {
+    if (!configured || !session || !profile) return;
+    if (profile.role === "seller" && !sellerRestaurant?.id) return;
+
+    let active = true;
+    const connectingTimer = window.setTimeout(() => {
+      if (active) setRealtimeStatus("connecting");
+    }, 0);
+    const unsubscribe = subscribeToOrders({
+      role: profile.role,
+      profileId: profile.id,
+      restaurantId: sellerRestaurant?.id,
+      onStatus: (status) => {
+        if (active) setRealtimeStatus(status);
+      },
+      onChange: (event) => {
+        if (realtimeRefreshTimer.current) window.clearTimeout(realtimeRefreshTimer.current);
+        realtimeRefreshTimer.current = window.setTimeout(() => {
+          void refreshRoleData();
+          if (profile.role === "seller" && event === "INSERT") flash("มีออเดอร์ใหม่ กรุณาตรวจสอบและกดรับออเดอร์");
+          else if (profile.role === "customer" && event === "UPDATE") flash("สถานะออเดอร์ของคุณอัปเดตแล้ว");
+        }, 250);
+      },
+    });
+
+    return () => {
+      active = false;
+      window.clearTimeout(connectingTimer);
+      unsubscribe();
+      if (realtimeRefreshTimer.current) window.clearTimeout(realtimeRefreshTimer.current);
+    };
+  }, [configured, session, profile, sellerRestaurant?.id, refreshRoleData, flash]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const visibleRestaurants = restaurants.filter((shop) => {
@@ -433,7 +469,7 @@ export default function MarketplaceApp() {
         </span>
       </div>
       <div className="header-actions">
-        <DataBadge source={dataSource} />
+        <DataBadge source={dataSource} realtime={realtimeStatus} />
         <button className="icon-btn" aria-label="การแจ้งเตือน" onClick={() => flash("ยังไม่มีการแจ้งเตือนใหม่") }>
           <Bell size={21} />
           <i />
@@ -557,11 +593,13 @@ export default function MarketplaceApp() {
   );
 }
 
-function DataBadge({ source }: { source: "loading" | "supabase" | "mock" }) {
+function DataBadge({ source, realtime }: { source: "loading" | "supabase" | "mock"; realtime: "connecting" | "connected" | "offline" }) {
   return (
-    <span className={`data-badge ${source}`}>
+    <span className={`data-badge ${source} ${source === "supabase" ? realtime : ""}`}>
       <i />
-      {source === "supabase" ? "Supabase Connected" : source === "loading" ? "กำลังเชื่อมต่อ" : "ข้อมูลตัวอย่าง"}
+      {source === "supabase"
+        ? realtime === "connected" ? "Supabase Realtime" : realtime === "offline" ? "Supabase Connected" : "กำลังเปิด Realtime"
+        : source === "loading" ? "กำลังเชื่อมต่อ" : "ข้อมูลตัวอย่าง"}
     </span>
   );
 }
