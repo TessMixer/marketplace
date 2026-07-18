@@ -11,7 +11,7 @@ type StoredGoogleOnboarding = GoogleOnboardingInput & {createdAt:number};
 
 async function loadProfile(userId:string) {
   if(!supabase) return null;
-  const {data,error}=await supabase.from("profiles").select("id,auth_user_id,name,phone,email,role,created_at").eq("auth_user_id",userId).single();
+  const {data,error}=await supabase.from("profiles").select("id,auth_user_id,name,phone,email,role,account_status,suspended_reason,suspended_at,created_at").eq("auth_user_id",userId).single();
   if(error) throw error;
   return data as Profile;
 }
@@ -79,6 +79,20 @@ export function AuthProvider({children}:{children:React.ReactNode}) {
     });
     return()=>subscription.unsubscribe();
   },[]);
+
+  useEffect(()=>{
+    if(!supabase||!session?.user) return;
+    const userId=session.user.id;
+    const channel=supabase
+      .channel(`profile-status:${userId}`)
+      .on("postgres_changes",{event:"UPDATE",schema:"public",table:"profiles",filter:`auth_user_id=eq.${userId}`},()=>{
+        void loadProfile(userId)
+          .then(nextProfile=>{setProfile(nextProfile);setProfileError(null);})
+          .catch(caught=>{setProfile(null);setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้");});
+      })
+      .subscribe();
+    return()=>{void supabase?.removeChannel(channel);};
+  },[session?.user]);
 
   const signIn=async(email:string,password:string)=>{
     if(!supabase) throw new Error("ยังไม่ได้เชื่อมต่อ Supabase");

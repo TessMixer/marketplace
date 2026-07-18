@@ -5,6 +5,7 @@ import type { Role } from "../data/mockData";
 
 export type RestaurantStatus = "pending" | "approved" | "suspended";
 export type OrderStatusDb = "pending" | "accepted" | "preparing" | "ready" | "completed" | "rejected" | "cancelled";
+export type AccountStatus = "active" | "suspended" | "closed";
 
 export type Category = {
   id: string;
@@ -80,7 +81,19 @@ export type ProfileRow = {
   phone: string | null;
   email: string | null;
   role: Role;
+  accountStatus: AccountStatus;
+  suspendedReason: string | null;
+  suspendedAt: string | null;
+  statusUpdatedAt: string | null;
   createdAt: string;
+};
+
+export type AdminUserAction = {
+  id: string;
+  action: AccountStatus;
+  reason: string | null;
+  createdAt: string;
+  adminName: string;
 };
 
 const fallbackRestaurantImage = "https://images.unsplash.com/photo-1552566626-52f8b828add9?auto=format&fit=crop&w=1000&q=80";
@@ -447,7 +460,10 @@ export async function deleteMenu(id: string, imageUrl?: string) {
 
 export async function getProfiles() {
   const client = requireClient();
-  const { data, error } = await client.from("profiles").select("id,name,phone,email,role,created_at").order("created_at", { ascending: false });
+  const { data, error } = await client
+    .from("profiles")
+    .select("id,name,phone,email,role,account_status,suspended_reason,suspended_at,status_updated_at,created_at")
+    .order("created_at", { ascending: false });
   if (error) throw error;
   return (data ?? []).map((row: any): ProfileRow => ({
     id: row.id,
@@ -455,7 +471,35 @@ export async function getProfiles() {
     phone: row.phone,
     email: row.email,
     role: row.role,
+    accountStatus: row.account_status ?? "active",
+    suspendedReason: row.suspended_reason ?? null,
+    suspendedAt: row.suspended_at ?? null,
+    statusUpdatedAt: row.status_updated_at ?? null,
     createdAt: row.created_at,
+  }));
+}
+
+export async function updateUserAccountStatus(profileId: string, status: AccountStatus, reason?: string) {
+  const client = requireClient();
+  const { data, error } = await client.rpc("admin_set_user_status", {
+    p_profile_id: profileId,
+    p_status: status,
+    p_reason: reason?.trim() || null,
+  });
+  if (error) throw error;
+  return data as AccountStatus;
+}
+
+export async function getAdminUserActionHistory(profileId: string) {
+  const client = requireClient();
+  const { data, error } = await client.rpc("admin_user_action_history", { p_profile_id: profileId });
+  if (error) throw error;
+  return (data ?? []).map((row: any): AdminUserAction => ({
+    id: row.id,
+    action: row.action,
+    reason: row.reason ?? null,
+    createdAt: row.created_at,
+    adminName: row.admin_name || "ผู้ดูแลระบบ",
   }));
 }
 

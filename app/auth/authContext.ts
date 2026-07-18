@@ -2,7 +2,18 @@ import type { Session, User } from "@supabase/supabase-js";
 import { createContext, useContext } from "react";
 import type { Role } from "../data/mockData";
 
-export type Profile = { id:string; auth_user_id:string; name:string; phone:string|null; email:string|null; role:Role; created_at:string };
+export type Profile = {
+  id:string;
+  auth_user_id:string;
+  name:string;
+  phone:string|null;
+  email:string|null;
+  role:Role;
+  account_status:"active"|"suspended"|"closed";
+  suspended_reason:string|null;
+  suspended_at:string|null;
+  created_at:string;
+};
 export type RegisterInput = { name:string; phone:string; email:string; password:string; role:"customer"|"seller"; restaurantName?:string; restaurantDescription?:string; restaurantPhone?:string; restaurantAddress?:string; openTime?:string; closeTime?:string };
 export type GoogleOnboardingInput = Omit<RegisterInput,"email"|"password">;
 

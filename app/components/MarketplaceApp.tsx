@@ -52,6 +52,7 @@ import {
   deleteFoodImage,
   deleteMenu,
   getAdminReport,
+  getAdminUserActionHistory,
   getCatalog,
   getCategories,
   getOrders,
@@ -71,6 +72,9 @@ import {
   updateOrderStatus,
   updateRestaurantAdmin,
   updateSellerRestaurant,
+  updateUserAccountStatus,
+  AccountStatus,
+  AdminUserAction,
 } from "../services/marketplaceRepository";
 
 type Screen =
@@ -115,6 +119,11 @@ const shopStatusText: Record<RestaurantStatus, string> = {
 };
 
 const roleLabel = (role: Role) => (role === "customer" ? "ลูกค้า" : role === "seller" ? "ผู้ขาย" : "ผู้ดูแลระบบ");
+const accountStatusText: Record<AccountStatus, string> = {
+  active: "ใช้งาน",
+  suspended: "ระงับ",
+  closed: "ปิดบัญชี",
+};
 
 function thaiError(error: unknown, fallback: string) {
   const message = error instanceof Error ? error.message.toLowerCase() : "";
@@ -138,6 +147,11 @@ function thaiError(error: unknown, fallback: string) {
     ["order can be cancelled only while pending", "ยกเลิกได้เฉพาะตอนที่ร้านยังไม่รับออเดอร์"],
     ["order can be rejected only while pending", "ปฏิเสธได้เฉพาะออเดอร์ใหม่"],
     ["invalid status transition", "ไม่สามารถข้ามลำดับสถานะออเดอร์ได้"],
+    ["account is not active", "บัญชีถูกระงับหรือปิดใช้งาน กรุณาติดต่อผู้ดูแลระบบ"],
+    ["admin permission required", "เฉพาะผู้ดูแลระบบเท่านั้นที่ทำรายการนี้ได้"],
+    ["cannot manage your own account", "ไม่สามารถจัดการสถานะบัญชีของตนเองได้"],
+    ["admin accounts are protected", "บัญชีผู้ดูแลระบบถูกป้องกัน ไม่สามารถเปลี่ยนสถานะได้"],
+    ["reason required", "กรุณาระบุเหตุผล"],
   ];
   return translations.find(([needle]) => message.includes(needle))?.[1] ?? fallback;
 }
@@ -378,7 +392,7 @@ export default function MarketplaceApp() {
   }, []);
 
   useEffect(() => {
-    if (!configured || !session || !profile) return;
+    if (!configured || !session || !profile || profile.account_status !== "active") return;
     const nextScreen = profile.role === "admin" ? "admin" : profile.role === "seller" ? "seller" : "home";
     const redirectTimer = window.setTimeout(() => setScreen(nextScreen), 0);
     const loader = profile.role === "admin" ? loadAdminData : profile.role === "seller" ? loadSellerData : loadSharedData;
@@ -407,7 +421,7 @@ export default function MarketplaceApp() {
   }, [role, loadAdminData, loadSellerData, loadSharedData, flash]);
 
   useEffect(() => {
-    if (!configured || !session || !profile) return;
+    if (!configured || !session || !profile || profile.account_status !== "active") return;
     if (profile.role === "seller" && !sellerRestaurant?.id) return;
 
     let active = true;
@@ -450,7 +464,7 @@ export default function MarketplaceApp() {
   }, [sellerAlertsEnabled, sellerPendingCount, notifySeller]);
 
   useEffect(() => {
-    if (!configured || !profile || role !== "customer") return;
+    if (!configured || !profile || profile.account_status !== "active" || role !== "customer") return;
     const catalogRefresh = window.setInterval(() => void refreshRoleData(), 60000);
     return () => window.clearInterval(catalogRefresh);
   }, [configured, profile, role, refreshRoleData]);
@@ -560,6 +574,18 @@ export default function MarketplaceApp() {
     );
   }
 
+  if (configured && session && profile && profile.account_status !== "active") {
+    return (
+      <div className="auth-loading blocked-account">
+        <div className="blocked-account-icon"><ShieldCheck size={34} /></div>
+        <h1>{profile.account_status === "closed" ? "บัญชีนี้ถูกปิดใช้งาน" : "บัญชีนี้ถูกระงับชั่วคราว"}</h1>
+        <p>{profile.suspended_reason || "กรุณาติดต่อผู้ดูแลระบบเพื่อสอบถามรายละเอียด"}</p>
+        {profile.suspended_at && <small>อัปเดตสถานะเมื่อ {new Date(profile.suspended_at).toLocaleString("th-TH")}</small>}
+        <button className="primary-button fit" onClick={signOut}>ออกจากระบบ</button>
+      </div>
+    );
+  }
+
   const customerHeader = (
     <header className="topbar customer-topbar">
       <button className="brand" onClick={() => go("home")}>
@@ -665,7 +691,7 @@ export default function MarketplaceApp() {
 
         {role === "admin" && screen === "admin" && <AdminDashboard summary={adminSummary} shops={adminRestaurants} orders={orders} go={go} />}
         {role === "admin" && screen === "admin-shops" && <AdminShops shops={adminRestaurants} refresh={refreshRoleData} flash={flash} />}
-        {role === "admin" && screen === "admin-users" && <AdminUsers users={users} />}
+        {role === "admin" && screen === "admin-users" && <AdminUsers users={users} currentProfileId={profile?.id ?? ""} refresh={refreshRoleData} flash={flash} />}
         {role === "admin" && screen === "admin-orders" && <OrdersBoard orders={orders} updateOrder={changeOrderStatus} busyAction={busyAction} admin />}
         {role === "admin" && screen === "admin-gp" && <GpSettings shops={adminRestaurants} refresh={refreshRoleData} flash={flash} />}
         {role === "admin" && screen === "admin-report" && <AdminReport summary={adminSummary} orders={orders} />}
@@ -1770,45 +1796,198 @@ function ShopDetailModal({ shop, onClose }: { shop: Restaurant; onClose: () => v
   </div></div>;
 }
 
-function AdminUsers({ users }: { users: ProfileRow[] }) {
+function AdminUsers({ users, currentProfileId, refresh, flash }: {
+  users: ProfileRow[];
+  currentProfileId: string;
+  refresh: () => Promise<void>;
+  flash: (message: string) => void;
+}) {
+  const [filter, setFilter] = useState<"all" | AccountStatus>("all");
+  const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<ProfileRow | null>(null);
+  const [action, setAction] = useState<{ user: ProfileRow; status: AccountStatus } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const normalizedQuery = query.trim().toLowerCase();
+  const visible = users.filter((user) => {
+    const matchesStatus = filter === "all" || user.accountStatus === filter;
+    const matchesQuery = !normalizedQuery || `${user.name} ${user.email ?? ""} ${user.phone ?? ""}`.toLowerCase().includes(normalizedQuery);
+    return matchesStatus && matchesQuery;
+  });
+
+  const submitStatus = async (reason: string) => {
+    if (!action || busy) return;
+    setBusy(true);
+    try {
+      await updateUserAccountStatus(action.user.id, action.status, reason);
+      await refresh();
+      setAction(null);
+      setSelected(null);
+      flash(`เปลี่ยนสถานะ ${action.user.name} เป็น “${accountStatusText[action.status]}” แล้ว`);
+    } catch (error) {
+      flash(thaiError(error, "เปลี่ยนสถานะบัญชีไม่สำเร็จ"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   return (
     <>
-      <DashboardTop title="จัดการผู้ใช้" subtitle="ดูบัญชีลูกค้า ผู้ขาย และ admin" />
+      <DashboardTop title="จัดการผู้ใช้" subtitle="ตรวจสอบ ระงับ และเปิดใช้งานบัญชีลูกค้าหรือผู้ขาย" />
+      <section className="user-policy-note">
+        <ShieldCheck size={21} />
+        <p><b>ผู้ขายไม่ต้องรออนุมัติบัญชีซ้ำ</b><small>บัญชีเข้าใช้งานได้ทันที แต่ร้านใหม่จะปิดและอยู่สถานะ “รออนุมัติ” จนกว่า Admin จะตรวจร้าน</small></p>
+      </section>
+      <div className="admin-user-toolbar">
+        <div className="filter-tabs">
+          {(["all", "active", "suspended", "closed"] as const).map((status) => (
+            <button className={filter === status ? "active" : ""} key={status} onClick={() => setFilter(status)}>
+              {status === "all" ? "ทั้งหมด" : accountStatusText[status]}
+              <b>{status === "all" ? users.length : users.filter((user) => user.accountStatus === status).length}</b>
+            </button>
+          ))}
+        </div>
+        <label className="admin-user-search">
+          <Search size={18} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="ค้นหาชื่อ อีเมล หรือเบอร์โทร" />
+        </label>
+      </div>
       <section className="panel">
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
                 <th>ชื่อผู้ใช้</th>
-                <th>อีเมล</th>
-                <th>โทรศัพท์</th>
+                <th>อีเมล / โทรศัพท์</th>
                 <th>บทบาท</th>
+                <th>สถานะบัญชี</th>
                 <th>สมัครเมื่อ</th>
+                <th>จัดการ</th>
               </tr>
             </thead>
             <tbody>
-              {users.map((user) => (
-                <tr key={user.id}>
-                  <td>
-                    <div className="user-row">
-                      <div className="avatar">{user.name[0]}</div>
-                      <b>{user.name}</b>
-                    </div>
-                  </td>
-                  <td>{user.email || "-"}</td>
-                  <td>{user.phone || "-"}</td>
-                  <td>
-                    <span className="role-tag">{roleLabel(user.role)}</span>
-                  </td>
-                  <td>{new Date(user.createdAt).toLocaleDateString("th-TH")}</td>
-                </tr>
-              ))}
+              {visible.map((user) => {
+                const protectedAccount = user.role === "admin" || user.id === currentProfileId;
+                return (
+                  <tr key={user.id}>
+                    <td>
+                      <div className="user-row">
+                        <div className="avatar">{user.name[0] || "ผ"}</div>
+                        <span><b>{user.name}</b>{user.id === currentProfileId && <small>บัญชีของคุณ</small>}</span>
+                      </div>
+                    </td>
+                    <td>{user.email || "-"}<small>{user.phone || "ไม่ระบุเบอร์โทร"}</small></td>
+                    <td><span className="role-tag">{roleLabel(user.role)}</span></td>
+                    <td>
+                      <span className={`account-status ${user.accountStatus}`}>{accountStatusText[user.accountStatus]}</span>
+                      {user.suspendedReason && <small className="status-reason">{user.suspendedReason}</small>}
+                    </td>
+                    <td>{new Date(user.createdAt).toLocaleDateString("th-TH")}</td>
+                    <td>
+                      <div className="table-actions">
+                        <button className="ghost-button small" onClick={() => setSelected(user)}>รายละเอียด</button>
+                        {!protectedAccount && user.accountStatus === "active" && (
+                          <button className="ghost-button small warning" onClick={() => setAction({ user, status: "suspended" })}>ระงับ</button>
+                        )}
+                        {!protectedAccount && user.accountStatus !== "active" && (
+                          <button className="small-primary" onClick={() => setAction({ user, status: "active" })}>เปิดใช้งาน</button>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+              {visible.length === 0 && <tr><td colSpan={6} className="empty-table">ไม่พบผู้ใช้ที่ตรงกับเงื่อนไข</td></tr>}
             </tbody>
           </table>
         </div>
       </section>
+      {selected && (
+        <AdminUserDetailModal
+          user={selected}
+          protectedAccount={selected.role === "admin" || selected.id === currentProfileId}
+          close={() => setSelected(null)}
+          chooseAction={(status) => { setAction({ user: selected, status }); setSelected(null); }}
+          flash={flash}
+        />
+      )}
+      {action && <AdminUserStatusModal action={action} busy={busy} close={() => !busy && setAction(null)} submit={submitStatus} />}
     </>
   );
+}
+
+function AdminUserStatusModal({ action, busy, close, submit }: {
+  action: { user: ProfileRow; status: AccountStatus };
+  busy: boolean;
+  close: () => void;
+  submit: (reason: string) => Promise<void>;
+}) {
+  const [reason, setReason] = useState("");
+  const needsReason = action.status !== "active";
+  const title = action.status === "active" ? "เปิดใช้งานบัญชี" : action.status === "closed" ? "ปิดบัญชี" : "ระงับบัญชี";
+  return <div className="modal-backdrop"><form className="modal" onSubmit={(event) => { event.preventDefault(); void submit(reason); }}>
+    <button type="button" className="close" disabled={busy} onClick={close}><X /></button>
+    <span className="kicker">จัดการสิทธิ์ผู้ใช้</span>
+    <h2>{title}</h2>
+    <p className="modal-detail">ผู้ใช้: <b>{action.user.name}</b><br />อีเมล: {action.user.email || "ไม่ระบุ"}</p>
+    {action.status === "suspended" && action.user.role === "seller" && <div className="modal-warning">ร้านของผู้ขายจะถูกระงับและปิดรับออเดอร์ทันที การเปิดบัญชีกลับจะไม่เปิดร้านอัตโนมัติ</div>}
+    <label>เหตุผล{needsReason ? " *" : " (ไม่บังคับ)"}
+      <textarea autoFocus value={reason} onChange={(event) => setReason(event.target.value)} placeholder={needsReason ? "ระบุเหตุผลที่จะแสดงให้ผู้ใช้เห็น" : "เช่น ตรวจสอบข้อมูลเรียบร้อยแล้ว"} />
+    </label>
+    <div className="modal-actions">
+      <button type="button" className="ghost-button" disabled={busy} onClick={close}>ยกเลิก</button>
+      <button type="submit" className={action.status === "active" ? "primary-button" : "primary-button danger-fill"} disabled={busy || (needsReason && !reason.trim())}>
+        {busy ? "กำลังบันทึก..." : `ยืนยัน${title}`}
+      </button>
+    </div>
+  </form></div>;
+}
+
+function AdminUserDetailModal({ user, protectedAccount, close, chooseAction, flash }: {
+  user: ProfileRow;
+  protectedAccount: boolean;
+  close: () => void;
+  chooseAction: (status: AccountStatus) => void;
+  flash: (message: string) => void;
+}) {
+  const [history, setHistory] = useState<AdminUserAction[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+  useEffect(() => {
+    let active = true;
+    getAdminUserActionHistory(user.id)
+      .then((rows) => { if (active) setHistory(rows); })
+      .catch((error) => flash(thaiError(error, "โหลดประวัติการจัดการไม่สำเร็จ")))
+      .finally(() => { if (active) setLoadingHistory(false); });
+    return () => { active = false; };
+  }, [user.id, flash]);
+
+  return <div className="modal-backdrop"><div className="modal admin-user-detail-modal">
+    <button type="button" className="close" onClick={close}><X /></button>
+    <span className="kicker">รายละเอียดบัญชี</span><h2>{user.name}</h2>
+    <div className="user-detail-grid">
+      <span><small>อีเมล</small><b>{user.email || "ไม่ระบุ"}</b></span>
+      <span><small>เบอร์โทร</small><b>{user.phone || "ไม่ระบุ"}</b></span>
+      <span><small>บทบาท</small><b>{roleLabel(user.role)}</b></span>
+      <span><small>สถานะ</small><b>{accountStatusText[user.accountStatus]}</b></span>
+    </div>
+    {user.suspendedReason && <div className="modal-warning"><b>เหตุผลล่าสุด</b><br />{user.suspendedReason}</div>}
+    <div className="user-action-history">
+      <h3><Clock3 size={17} /> ประวัติการจัดการ</h3>
+      {loadingHistory && <p>กำลังโหลด...</p>}
+      {!loadingHistory && history.length === 0 && <p>ยังไม่มีประวัติการเปลี่ยนสถานะ</p>}
+      {history.map((item) => <div key={item.id}>
+        <span className={`account-status ${item.action}`}>{accountStatusText[item.action]}</span>
+        <p><b>{item.reason || "ไม่ระบุเหตุผล"}</b><small>{item.adminName} · {new Date(item.createdAt).toLocaleString("th-TH")}</small></p>
+      </div>)}
+    </div>
+    <div className="modal-actions">
+      {!protectedAccount && user.accountStatus === "active" && <>
+        <button className="ghost-button warning" onClick={() => chooseAction("suspended")}>ระงับบัญชี</button>
+        <button className="ghost-button danger" onClick={() => chooseAction("closed")}>ปิดบัญชี</button>
+      </>}
+      {!protectedAccount && user.accountStatus !== "active" && <button className="primary-button" onClick={() => chooseAction("active")}>เปิดใช้งานบัญชี</button>}
+      {protectedAccount && <p className="protected-account-note"><ShieldCheck size={16} /> บัญชีผู้ดูแลระบบถูกป้องกัน</p>}
+    </div>
+  </div></div>;
 }
 
 function GpSettings({ shops, refresh, flash }: { shops: Restaurant[]; refresh: () => Promise<void>; flash: (message: string) => void }) {
