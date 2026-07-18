@@ -1,24 +1,9 @@
 "use client";
 
-import type { Session, User } from "@supabase/supabase-js";
-import { createContext, useContext, useEffect, useState } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { useEffect, useState } from "react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
-import type { Role } from "../data/mockData";
-
-export type Profile = { id:string; auth_user_id:string; name:string; phone:string|null; email:string|null; role:Role; created_at:string };
-export type RegisterInput = { name:string; phone:string; email:string; password:string; role:"customer"|"seller"; restaurantName?:string; restaurantDescription?:string; restaurantPhone?:string; restaurantAddress?:string; openTime?:string; closeTime?:string };
-
-type AuthContextValue = {
-  session:Session|null; user:User|null; profile:Profile|null; profileError:string|null; loading:boolean; configured:boolean; passwordRecovery:boolean;
-  signIn:(email:string,password:string)=>Promise<void>;
-  register:(input:RegisterInput)=>Promise<{needsEmailConfirmation:boolean}>;
-  sendPasswordReset:(email:string)=>Promise<void>;
-  updatePassword:(password:string)=>Promise<void>;
-  updateAccount:(input:{name:string;phone:string;email:string})=>Promise<{emailConfirmationRequired:boolean}>;
-  signOut:()=>Promise<void>; refreshProfile:()=>Promise<void>;
-};
-
-const AuthContext = createContext<AuthContextValue|null>(null);
+import { AuthContext, type Profile, type RegisterInput } from "./authContext";
 
 async function loadProfile(userId:string) {
   if(!supabase) return null;
@@ -118,5 +103,3 @@ export function AuthProvider({children}:{children:React.ReactNode}) {
 
   return <AuthContext.Provider value={{session,user:session?.user??null,profile,profileError,loading,configured:isSupabaseConfigured,passwordRecovery,signIn,register,sendPasswordReset,updatePassword,updateAccount,signOut,refreshProfile}}>{children}</AuthContext.Provider>;
 }
-
-export function useAuth(){ const context=useContext(AuthContext); if(!context) throw new Error("useAuth must be used within AuthProvider"); return context; }

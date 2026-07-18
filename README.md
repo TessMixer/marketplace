@@ -31,6 +31,7 @@ npm run build
 npm run preview
 npm run lint
 npm test
+npm run check
 ```
 
 Production build อยู่ในโฟลเดอร์ `dist`
@@ -59,6 +60,16 @@ Production build อยู่ในโฟลเดอร์ `dist`
 6. กด Deploy
 
 `vercel.json` รองรับ SPA fallback โดยให้ไฟล์จริงใน `dist` ทำงานตามปกติ และส่ง route อื่นกลับไป `index.html`
+
+## Production security checklist
+
+- เปลี่ยนรหัสผ่านบัญชีตัวอย่างก่อนเปิดให้บุคคลทั่วไปใช้งาน และเปิด MFA สำหรับ Admin ใน Supabase
+- ตั้ง Custom SMTP ที่ `Authentication → Emails` เพื่อให้ยืนยันอีเมลและรีเซ็ตรหัสผ่านส่งได้เสถียร
+- ตั้ง Site URL เป็นโดเมน Production และเพิ่ม `https://your-domain.example/**` ใน Redirect URLs
+- หน้าเว็บบังคับรหัสผ่านใหม่อย่างน้อย 10 ตัวอักษรและต้องมีตัวอักษรกับตัวเลข ส่วนบัญชีเก่ายังเข้าสู่ระบบได้เพื่อเปลี่ยนรหัสผ่าน
+- `vercel.json` กำหนด CSP, anti-framing, referrer และ permissions headers สำหรับ Production
+- GitHub Actions รัน lint, test และ build ทุกครั้งที่ push หรือเปิด Pull Request
+- ห้ามเก็บ `.env`, service role key, database password หรือ SMTP password ใน GitHub/Vercel ฝั่ง client
 
 ## Supabase
 

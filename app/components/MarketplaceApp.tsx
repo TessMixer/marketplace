@@ -41,7 +41,7 @@ import {
   X,
 } from "lucide-react";
 import AuthScreen from "../auth/AuthScreen";
-import { type Profile, useAuth } from "../auth/AuthProvider";
+import { type Profile, useAuth } from "../auth/authContext";
 import { categories as mockCategories, initialMenu, initialOrders, money, restaurants as mockRestaurants, Role } from "../data/mockData";
 import { compressFoodImage } from "../lib/imageUpload";
 import { isSupabaseConfigured } from "../lib/supabase";
