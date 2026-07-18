@@ -44,6 +44,7 @@ Production build อยู่ในโฟลเดอร์ `dist`
 - แจ้งเตือนออเดอร์ใหม่แบบ Realtime พร้อมเสียงและ Browser Notification
 - ตั้งเวลารับอาหาร จำกัดออเดอร์พร้อมกัน และตรวจเวลาเปิด–ปิดร้านจาก RPC
 - พิมพ์ใบออเดอร์ ดาวน์โหลดรายงาน CSV ลืมรหัสผ่าน และแก้ไขโปรไฟล์
+- เข้าสู่ระบบด้วย Google ผ่าน Supabase OAuth; ร้านที่สมัครด้วย Google ยังคงเป็น `pending` จนกว่า Admin จะอนุมัติ
 - Admin: อนุมัติหรือระงับร้าน ตั้งค่า GP ดูออเดอร์ ผู้ใช้ และรายงานระบบ
 - Supabase Auth, Row Level Security, Realtime และ RPC คำนวณราคา/GP จากข้อมูลจริงในฐานข้อมูล
 - PWA manifest และ service worker
@@ -66,6 +67,8 @@ Production build อยู่ในโฟลเดอร์ `dist`
 - เปลี่ยนรหัสผ่านบัญชีตัวอย่างก่อนเปิดให้บุคคลทั่วไปใช้งาน และเปิด MFA สำหรับ Admin ใน Supabase
 - ตั้ง Custom SMTP ที่ `Authentication → Emails` เพื่อให้ยืนยันอีเมลและรีเซ็ตรหัสผ่านส่งได้เสถียร
 - ตั้ง Site URL เป็นโดเมน Production และเพิ่ม `https://your-domain.example/**` ใน Redirect URLs
+- เปิด Google Provider ใน Supabase Auth และกำหนด Google OAuth Client ID/Secret โดยไม่บันทึก Secret ลง Git
+- เพิ่ม Supabase callback URL ใน Google OAuth Authorized redirect URIs
 - หน้าเว็บบังคับรหัสผ่านใหม่อย่างน้อย 10 ตัวอักษรและต้องมีตัวอักษรกับตัวเลข ส่วนบัญชีเก่ายังเข้าสู่ระบบได้เพื่อเปลี่ยนรหัสผ่าน
 - `vercel.json` กำหนด CSP, anti-framing, referrer และ permissions headers สำหรับ Production
 - GitHub Actions รัน lint, test และ build ทุกครั้งที่ push หรือเปิด Pull Request

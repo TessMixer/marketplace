@@ -4,10 +4,12 @@ import type { Role } from "../data/mockData";
 
 export type Profile = { id:string; auth_user_id:string; name:string; phone:string|null; email:string|null; role:Role; created_at:string };
 export type RegisterInput = { name:string; phone:string; email:string; password:string; role:"customer"|"seller"; restaurantName?:string; restaurantDescription?:string; restaurantPhone?:string; restaurantAddress?:string; openTime?:string; closeTime?:string };
+export type GoogleOnboardingInput = Omit<RegisterInput,"email"|"password">;
 
 export type AuthContextValue = {
   session:Session|null; user:User|null; profile:Profile|null; profileError:string|null; loading:boolean; configured:boolean; passwordRecovery:boolean;
   signIn:(email:string,password:string)=>Promise<void>;
+  signInWithGoogle:(input?:GoogleOnboardingInput)=>Promise<void>;
   register:(input:RegisterInput)=>Promise<{needsEmailConfirmation:boolean}>;
   sendPasswordReset:(email:string)=>Promise<void>;
   updatePassword:(password:string)=>Promise<void>;

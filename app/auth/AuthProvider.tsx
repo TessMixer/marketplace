@@ -3,13 +3,47 @@
 import type { Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 import { isSupabaseConfigured, supabase } from "../lib/supabase";
-import { AuthContext, type Profile, type RegisterInput } from "./authContext";
+import { AuthContext, type GoogleOnboardingInput, type Profile, type RegisterInput } from "./authContext";
+
+const GOOGLE_ONBOARDING_KEY="imdee-google-onboarding";
+
+type StoredGoogleOnboarding = GoogleOnboardingInput & {createdAt:number};
 
 async function loadProfile(userId:string) {
   if(!supabase) return null;
   const {data,error}=await supabase.from("profiles").select("id,auth_user_id,name,phone,email,role,created_at").eq("auth_user_id",userId).single();
   if(error) throw error;
   return data as Profile;
+}
+
+async function completeGoogleOnboarding(userId:string) {
+  if(!supabase) return null;
+  const stored=sessionStorage.getItem(GOOGLE_ONBOARDING_KEY);
+  if(!stored) return loadProfile(userId);
+  try {
+    const input=JSON.parse(stored) as StoredGoogleOnboarding;
+    if(!input.createdAt||Date.now()-input.createdAt>30*60*1000) {
+      sessionStorage.removeItem(GOOGLE_ONBOARDING_KEY);
+      return loadProfile(userId);
+    }
+    const {error}=await supabase.rpc("complete_google_onboarding",{
+      p_role:input.role,
+      p_name:input.name,
+      p_phone:input.phone,
+      p_restaurant_name:input.restaurantName??null,
+      p_restaurant_description:input.restaurantDescription??null,
+      p_restaurant_phone:input.restaurantPhone??null,
+      p_restaurant_address:input.restaurantAddress??null,
+      p_open_time:input.openTime??null,
+      p_close_time:input.closeTime??null,
+    });
+    if(error) throw error;
+    sessionStorage.removeItem(GOOGLE_ONBOARDING_KEY);
+    return loadProfile(userId);
+  } catch(caught) {
+    if(caught instanceof SyntaxError) sessionStorage.removeItem(GOOGLE_ONBOARDING_KEY);
+    throw caught;
+  }
 }
 
 export function AuthProvider({children}:{children:React.ReactNode}) {
@@ -22,7 +56,7 @@ export function AuthProvider({children}:{children:React.ReactNode}) {
   const refreshProfile=async()=>{
     if(!session?.user) return;
     setLoading(true); setProfileError(null);
-    try { setProfile(await loadProfile(session.user.id)); }
+    try { setProfile(await completeGoogleOnboarding(session.user.id)); }
     catch(caught) { setProfile(null); setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้"); }
     finally { setLoading(false); }
   };
@@ -32,7 +66,7 @@ export function AuthProvider({children}:{children:React.ReactNode}) {
     supabase.auth.getSession().then(async({data})=>{
       setSession(data.session);
       if(data.session?.user) {
-        try { setProfile(await loadProfile(data.session.user.id)); setProfileError(null); }
+        try { setProfile(await completeGoogleOnboarding(data.session.user.id)); setProfileError(null); }
         catch(caught) { setProfile(null); setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้"); }
       }
       setLoading(false);
@@ -40,7 +74,7 @@ export function AuthProvider({children}:{children:React.ReactNode}) {
     const {data:{subscription}}=supabase.auth.onAuthStateChange((event,nextSession)=>{
       if(event==="PASSWORD_RECOVERY") setPasswordRecovery(true);
       setSession(nextSession);
-      if(nextSession?.user) window.setTimeout(()=>loadProfile(nextSession.user.id).then(nextProfile=>{setProfile(nextProfile);setProfileError(null);}).catch(caught=>{setProfile(null);setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้");}).finally(()=>setLoading(false)),0);
+      if(nextSession?.user) window.setTimeout(()=>completeGoogleOnboarding(nextSession.user.id).then(nextProfile=>{setProfile(nextProfile);setProfileError(null);}).catch(caught=>{setProfile(null);setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้");}).finally(()=>setLoading(false)),0);
       else { setProfile(null); setProfileError(null); setLoading(false); }
     });
     return()=>subscription.unsubscribe();
@@ -53,6 +87,20 @@ export function AuthProvider({children}:{children:React.ReactNode}) {
     setSession(data.session);
     try { setProfile(await loadProfile(data.user.id)); setProfileError(null); }
     catch(caught) { setProfile(null); setProfileError(caught instanceof Error?caught.message:"ไม่สามารถโหลดสิทธิ์ผู้ใช้ได้"); throw caught; }
+  };
+
+  const signInWithGoogle=async(input?:GoogleOnboardingInput)=>{
+    if(!supabase) throw new Error("ยังไม่ได้เชื่อมต่อ Supabase");
+    if(input) sessionStorage.setItem(GOOGLE_ONBOARDING_KEY,JSON.stringify({...input,createdAt:Date.now()}));
+    else sessionStorage.removeItem(GOOGLE_ONBOARDING_KEY);
+    const {error}=await supabase.auth.signInWithOAuth({
+      provider:"google",
+      options:{redirectTo:window.location.origin,queryParams:{prompt:"select_account"}},
+    });
+    if(error) {
+      sessionStorage.removeItem(GOOGLE_ONBOARDING_KEY);
+      throw error;
+    }
   };
 
   const register=async(input:RegisterInput)=>{
@@ -101,5 +149,5 @@ export function AuthProvider({children}:{children:React.ReactNode}) {
 
   const signOut=async()=>{ if(supabase) await supabase.auth.signOut(); setSession(null); setProfile(null); setProfileError(null); };
 
-  return <AuthContext.Provider value={{session,user:session?.user??null,profile,profileError,loading,configured:isSupabaseConfigured,passwordRecovery,signIn,register,sendPasswordReset,updatePassword,updateAccount,signOut,refreshProfile}}>{children}</AuthContext.Provider>;
+  return <AuthContext.Provider value={{session,user:session?.user??null,profile,profileError,loading,configured:isSupabaseConfigured,passwordRecovery,signIn,signInWithGoogle,register,sendPasswordReset,updatePassword,updateAccount,signOut,refreshProfile}}>{children}</AuthContext.Provider>;
 }

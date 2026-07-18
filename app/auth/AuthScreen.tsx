@@ -7,7 +7,7 @@ import { type RegisterInput, useAuth } from "./authContext";
 const PASSWORD_MIN_LENGTH = 10;
 
 export default function AuthScreen(){
-  const {signIn,register,sendPasswordReset,updatePassword,passwordRecovery}=useAuth();
+  const {signIn,signInWithGoogle,register,sendPasswordReset,updatePassword,passwordRecovery}=useAuth();
   const [mode,setMode]=useState<"login"|"register"|"forgot"|"reset">(passwordRecovery?"reset":"login");
   const [showPassword,setShowPassword]=useState(false);
   const [confirmPassword,setConfirmPassword]=useState("");
@@ -44,6 +44,27 @@ export default function AuthScreen(){
     finally{setBusy(false);}
   };
 
+  const submitGoogle=async()=>{
+    setBusy(true); setError(""); setSuccess("");
+    try {
+      if(mode==="register") {
+        if(!form.name.trim()||!form.phone.trim()) throw new Error("กรุณากรอกชื่อและเบอร์โทรศัพท์ก่อนสมัครด้วย Google");
+        if(form.role==="seller"&&(!form.restaurantName?.trim()||!form.restaurantDescription?.trim()||!form.restaurantPhone?.trim()||!form.restaurantAddress?.trim())) {
+          throw new Error("กรุณากรอกข้อมูลร้านให้ครบก่อนสมัครผู้ขายด้วย Google");
+        }
+        await signInWithGoogle({
+          role:form.role,name:form.name.trim(),phone:form.phone.trim(),
+          restaurantName:form.restaurantName?.trim(),restaurantDescription:form.restaurantDescription?.trim(),
+          restaurantPhone:form.restaurantPhone?.trim(),restaurantAddress:form.restaurantAddress?.trim(),
+          openTime:form.openTime,closeTime:form.closeTime,
+        });
+      } else await signInWithGoogle();
+    } catch(caught) {
+      setError(caught instanceof Error?caught.message:"ไม่สามารถเข้าสู่ระบบด้วย Google ได้");
+      setBusy(false);
+    }
+  };
+
   return <main className="auth-page">
     <section className="auth-brand-panel"><div className="auth-brand"><span><UtensilsCrossed/></span><b>อิ่มดี</b></div><div><span className="auth-kicker">ตลาดอาหารออนไลน์สำหรับทุกคน</span><h1>สั่งง่าย<br/>ขายคล่อง<br/><em>จัดการครบ</em></h1><p>ระบบเดียวสำหรับลูกค้า ร้านค้า และผู้ดูแล</p></div><ul><li><Check/> ร้านอาหารคุณภาพใกล้บ้าน</li><li><Check/> ร้านค้าจัดการออเดอร์ได้ทันที</li><li><Check/> ปลอดภัยด้วย Supabase Auth</li></ul></section>
     <section className="auth-form-panel"><div className="auth-card">
@@ -51,6 +72,7 @@ export default function AuthScreen(){
       <span className="auth-kicker">{mode==="login"?"ยินดีต้อนรับกลับมา":mode==="register"?"เริ่มต้นใช้งานอิ่มดี":"ดูแลบัญชีของคุณ"}</span>
       <h2>{mode==="login"?"เข้าสู่ระบบ":mode==="register"?"สร้างบัญชีใหม่":mode==="forgot"?"ลืมรหัสผ่าน":"ตั้งรหัสผ่านใหม่"}</h2>
       <p>{mode==="login"?"กรอกข้อมูลเพื่อเข้าสู่บัญชีของคุณ":mode==="register"?"สมัครได้ฟรี ใช้เวลาไม่เกิน 2 นาที":mode==="forgot"?"ระบบจะส่งลิงก์ตั้งรหัสผ่านใหม่ไปทางอีเมล":"ตั้งรหัสผ่านใหม่อย่างน้อย 10 ตัวอักษร และมีตัวอักษรกับตัวเลข"}</p>
+      {mode==="login"&&<><button className="google-auth-button" type="button" disabled={busy} onClick={submitGoogle}><GoogleLogo/> เข้าสู่ระบบด้วย Google</button><div className="auth-divider"><span>หรือเข้าสู่ระบบด้วยอีเมล</span></div></>}
       <form onSubmit={submit}>
         {mode==="register"&&<><div className="auth-role-choice"><button type="button" className={form.role==="customer"?"active":""} onClick={()=>update("role","customer")}><UserRound/><span><b>ลูกค้า</b><small>สั่งอาหารและดูสถานะออเดอร์</small></span></button><button type="button" className={form.role==="seller"?"active":""} onClick={()=>update("role","seller")}><Store/><span><b>ผู้ขาย</b><small>เปิดร้านและจัดการออเดอร์</small></span></button></div><div className="auth-grid"><AuthField icon={<UserRound/>} label="ชื่อ-นามสกุล" name="name" autoComplete="name" value={form.name} onChange={v=>update("name",v)} placeholder="ชื่อของคุณ"/><AuthField icon={<Phone/>} label="เบอร์โทรศัพท์" name="phone" type="tel" autoComplete="tel" value={form.phone} onChange={v=>update("phone",v)} placeholder="08x-xxx-xxxx"/></div></>}
         {mode!=="reset"&&<AuthField icon={<Mail/>} label="อีเมล" name="email" type="email" autoComplete="email" spellCheck={false} value={form.email} onChange={v=>update("email",v)} placeholder="name@example.com"/>}
@@ -58,6 +80,7 @@ export default function AuthScreen(){
         {mode==="reset"&&<label className="auth-field"><span>ยืนยันรหัสผ่านใหม่</span><div><LockKeyhole/><input required name="confirm-password" minLength={PASSWORD_MIN_LENGTH} autoComplete="new-password" type={showPassword?"text":"password"} value={confirmPassword} onChange={e=>setConfirmPassword(e.target.value)} placeholder="กรอกรหัสผ่านใหม่อีกครั้ง"/></div></label>}
         {mode==="register"&&form.role==="seller"&&<div className="seller-register"><div className="seller-form-head"><Store/><span><b>ข้อมูลร้านอาหาร</b><small>ร้านใหม่จะรอ Admin ตรวจสอบก่อนเปิดขาย</small></span></div><AuthField icon={<UtensilsCrossed/>} label="ชื่อร้าน" value={form.restaurantName??""} onChange={v=>update("restaurantName",v)} placeholder="เช่น ครัวแม่อร"/><label className="auth-field"><span>คำอธิบายร้าน</span><textarea required value={form.restaurantDescription} onChange={e=>update("restaurantDescription",e.target.value)} placeholder="บอกจุดเด่นของร้านคุณ"/></label><div className="auth-grid"><AuthField icon={<Phone/>} label="เบอร์ร้าน" value={form.restaurantPhone??""} onChange={v=>update("restaurantPhone",v)} placeholder="02-xxx-xxxx"/><AuthField icon={<MapPin/>} label="ที่อยู่ร้าน" value={form.restaurantAddress??""} onChange={v=>update("restaurantAddress",v)} placeholder="ที่อยู่ร้าน"/></div><div className="auth-grid"><AuthField icon={<Clock3/>} label="เวลาเปิด" type="time" value={form.openTime??""} onChange={v=>update("openTime",v)}/><AuthField icon={<Clock3/>} label="เวลาปิด" type="time" value={form.closeTime??""} onChange={v=>update("closeTime",v)}/></div></div>}
         {error&&<div className="auth-message error" role="alert">{error}</div>}{success&&<div className="auth-message success" role="status" aria-live="polite">{success}</div>}
+        {mode==="register"&&<><button className="google-auth-button" type="button" disabled={busy} onClick={submitGoogle}><GoogleLogo/> {form.role==="seller"?"สมัครผู้ขายด้วย Google":"สมัครลูกค้าด้วย Google"}</button><div className="auth-divider"><span>หรือสมัครด้วยอีเมล</span></div></>}
         <button className="auth-submit" type="submit" disabled={busy}>{busy?"กำลังดำเนินการ...":mode==="login"?"เข้าสู่ระบบ":mode==="register"?"สมัครสมาชิก":mode==="forgot"?"ส่งลิงก์ตั้งรหัสผ่าน":"บันทึกรหัสผ่านใหม่"}</button>
       </form>
       {mode==="login"&&<button className="forgot-password" type="button" onClick={()=>switchMode("forgot")}>ลืมรหัสผ่าน?</button>}
@@ -70,5 +93,7 @@ function validateNewPassword(password:string){
   if(password.length<PASSWORD_MIN_LENGTH) throw new Error("รหัสผ่านใหม่ต้องมีอย่างน้อย 10 ตัวอักษร");
   if(!/[A-Za-z]/.test(password)||!/\d/.test(password)) throw new Error("รหัสผ่านใหม่ต้องมีทั้งตัวอักษรและตัวเลข");
 }
+
+function GoogleLogo(){return <svg aria-hidden="true" viewBox="0 0 24 24"><path fill="#4285F4" d="M21.6 12.2c0-.7-.1-1.4-.2-2H12v3.9h5.4a4.6 4.6 0 0 1-2 3v2.5h3.2c1.9-1.7 3-4.3 3-7.4Z"/><path fill="#34A853" d="M12 22c2.7 0 5-.9 6.6-2.4l-3.2-2.5c-.9.6-2 1-3.4 1a5.8 5.8 0 0 1-5.5-4H3.2v2.6A10 10 0 0 0 12 22Z"/><path fill="#FBBC05" d="M6.5 14.1a6 6 0 0 1 0-4.2V7.3H3.2a10 10 0 0 0 0 9.4l3.3-2.6Z"/><path fill="#EA4335" d="M12 5.9c1.5 0 2.8.5 3.8 1.5l2.9-2.8A9.7 9.7 0 0 0 3.2 7.3l3.3 2.6A5.8 5.8 0 0 1 12 5.9Z"/></svg>}
 
 function AuthField({icon,label,value,onChange,placeholder="",type="text",name,autoComplete,spellCheck}:{icon:React.ReactNode;label:string;value:string;onChange:(value:string)=>void;placeholder?:string;type?:string;name?:string;autoComplete?:string;spellCheck?:boolean}){return <label className="auth-field"><span>{label}</span><div>{icon}<input required name={name} type={type} autoComplete={autoComplete} spellCheck={spellCheck} value={value} onChange={event=>onChange(event.target.value)} placeholder={placeholder}/></div></label>}
